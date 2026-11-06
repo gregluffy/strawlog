@@ -3,6 +3,15 @@
   import { api } from '../lib/api.js'
   import { bytes, shortTs, highlight } from '../lib/fmt.js'
   import { app, go, setNode, nodeName } from '../lib/state.svelte.js'
+  import Icon from '../lib/ui/Icon.svelte'
+  import Select from '../lib/ui/Select.svelte'
+  import Switch from '../lib/ui/Switch.svelte'
+
+  const sinceOpts = [
+    { value: '', label: 'Any time' }, { value: '15m', label: 'Last 15 minutes' }, { value: '1h', label: 'Last hour' },
+    { value: '6h', label: 'Last 6 hours' }, { value: '24h', label: 'Last 24 hours' }, { value: '7d', label: 'Last 7 days' },
+  ]
+  const limitOpts = [100, 500, 1000, 5000].map((k) => ({ value: k, label: `Max ${k.toLocaleString()}` }))
 
   let sources = $state([])
   let query = $state('')
@@ -70,35 +79,39 @@
   </div>
 
   <form class="card form" onsubmit={run}>
-    <div class="row">
-      <!-- svelte-ignore a11y_autofocus -->
-      <input class="grow q mono" placeholder={regex ? 'regular expression, e.g. timeout|refused' : 'text to find, e.g. connection refused'} bind:value={query} autofocus />
-      <button class="primary" disabled={busy}>{#if busy}<span class="spin"></span>{/if} Search</button>
+    <div class="qrow">
+      <div class="qbox">
+        <Icon name="search" size={17} />
+        <!-- svelte-ignore a11y_autofocus -->
+        <input class="q mono" placeholder={regex ? 'Regular expression, e.g. timeout|refused' : 'Text to find, e.g. connection refused'} bind:value={query} autofocus />
+        <div class="qflags">
+          <button type="button" class="flag" class:on={regex} aria-pressed={regex} title="Regular expression" onclick={() => (regex = !regex)}>.*</button>
+          <button type="button" class="flag" class:on={caseSensitive} aria-pressed={caseSensitive} title="Match case" onclick={() => (caseSensitive = !caseSensitive)}>Aa</button>
+        </div>
+      </div>
+      <button class="primary go" disabled={busy}>{#if busy}<span class="spin"></span>{/if} Search</button>
     </div>
     <div class="row opts">
-      <label class="check"><input type="checkbox" bind:checked={regex} /> regex</label>
-      <label class="check"><input type="checkbox" bind:checked={caseSensitive} /> case sensitive</label>
-      <label class="check" title="Also scan rotated and .gz files"><input type="checkbox" bind:checked={includeRotated} /> include rotated/.gz</label>
-      <label class="check"><input type="checkbox" bind:checked={allNodes} /> all nodes</label>
+      <Select bind:value={since} options={sinceOpts} icon="clock" size="sm" label="Time range" menuWidth={180} />
+      <Select bind:value={limit} options={limitOpts} size="sm" label="Max results" />
       <span class="sep"></span>
-      {#each Object.keys(lv) as k}<label class="check lv {k}"><input type="checkbox" bind:checked={lv[k]} /> {k}</label>{/each}
+      <div class="lvls">
+        <span class="dim small">Levels</span>
+        {#each Object.keys(lv) as k}<button type="button" class="lvchip {k}" class:on={lv[k]} aria-pressed={lv[k]} onclick={() => (lv[k] = !lv[k])}><span class="ldot"></span>{k}</button>{/each}
+      </div>
       <span class="sep"></span>
-      <label class="check">since
-        <select bind:value={since}>
-          <option value="">any time</option><option value="15m">15 min</option><option value="1h">1 hour</option><option value="6h">6 hours</option><option value="24h">24 hours</option><option value="7d">7 days</option>
-        </select>
-      </label>
-      <label class="check">max <select bind:value={limit}>{#each [100, 500, 1000, 5000] as k}<option value={k}>{k}</option>{/each}</select></label>
+      <Switch bind:checked={includeRotated} label="Rotated & .gz" size="sm" title="Also scan rotated and compressed files" />
+      <Switch bind:checked={allNodes} label="All nodes" size="sm" />
     </div>
     <div class="row scope">
       <span class="muted small">Scope:</span>
       {#if sourceId && !allNodes}
         <span class="badge info">{srcName[sourceId] || sourceId}</span>
-        <button type="button" class="ghost sm" onclick={() => { sourceId = ''; go('/search') }}>✕ all sources</button>
+        <button type="button" class="ghost sm" onclick={() => { sourceId = ''; go('/search') }}><Icon name="x" size={13} /> All sources</button>
       {:else}
-        {#if selApps.length === 0}<span class="badge">all apps on {allNodes ? 'all nodes' : nodeName(app.node)}</span>{/if}
+        <button type="button" class="chip" class:on={selApps.length === 0} onclick={() => (selApps = [])}>All apps on {allNodes ? 'all nodes' : nodeName(app.node)}</button>
         {#each apps as a}
-          <button type="button" class="chip sm" class:on={selApps.includes(a)} onclick={() => toggleApp(a)}>{a}</button>
+          <button type="button" class="chip" class:on={selApps.includes(a)} onclick={() => toggleApp(a)}>{a}</button>
         {/each}
       {/if}
     </div>
@@ -112,16 +125,16 @@
       <b>{result.matches.toLocaleString()} matches</b>
       {#if result.truncated}<span class="badge warn">showing newest {result.lines.length}</span>{/if}
       <span class="muted">scanned {bytes(result.scanned)} in {result.ms} ms</span>
-      <label class="check right small"><input type="checkbox" bind:checked={wrap} /> wrap</label>
+      <span class="right"><Switch bind:checked={wrap} label="Wrap" size="sm" /></span>
     </div>
     {#each result.errors as e}<div class="alert warn small" style="margin-bottom:6px">{e}</div>{/each}
     <div class="card tight">
       <div class="logbox results" class:nowrap={!wrap}>
-        {#if result.lines.length === 0}<div class="empty">Nothing found.</div>{/if}
+        {#if result.lines.length === 0}<div class="empty"><div class="ei"><Icon name="search" size={22} /></div>Nothing found.</div>{/if}
         {#each result.lines as l, i (i)}
           <div class="ll {l.l || ''}">
             {#if l.t}<span class="ts">{shortTs(l.t)}</span>{/if}
-            <button class="src ghost linkish" onclick={() => openSrc(l)} title={(l.f || l.s) + ' on ' + nodeName(l.node)}>{allNodes ? nodeName(l.node) + '/' : ''}{srcName[l.s] || l.s.replace(/^\w+:/, '')}</button>
+            <button class="src ghost linkish" onclick={() => openSrc(l)} title={(l.f || l.s) + ' on ' + nodeName(l.node)}>{allNodes ? nodeName(l.node) + ' / ' : ''}{l.s.startsWith('journal:') && l.st ? l.st : srcName[l.s] || l.s.replace(/^\w+:/, '')}</button>
             <span class="msg">{#each highlight(l.m, query, regex, caseSensitive) as p}{#if p.m}<mark>{p.t}</mark>{:else}{p.t}{/if}{/each}</span>
           </div>
         {/each}
@@ -132,10 +145,22 @@
 
 <style>
   .form { display: flex; flex-direction: column; gap: 12px; }
-  .q { font-size: 14px; padding: 8px 12px; }
-  .opts { gap: 14px; font-size: 13px; }
-  .sep { width: 1px; height: 18px; background: var(--border); }
-  .lv.error { color: var(--err); } .lv.warn { color: var(--warn); } .lv.info { color: var(--info); } .lv.debug { color: var(--debug); }
+  .qrow { display: flex; gap: 10px; }
+  .qbox { position: relative; flex: 1; display: flex; align-items: center; }
+  .qbox > :global(.icon) { position: absolute; left: 13px; color: var(--dim); pointer-events: none; }
+  .q { width: 100%; height: 42px; font-size: 14px; padding: 0 92px 0 40px; border-radius: var(--r-md); }
+  .go { height: 42px; padding: 0 20px; border-radius: var(--r-md); }
+  .qflags { position: absolute; right: 6px; display: flex; gap: 3px; }
+  .flag { height: 28px; min-width: 34px; padding: 0 8px; font-family: var(--mono); font-size: 12.5px; box-shadow: none; background: transparent; border-color: transparent; color: var(--dim); }
+  .flag.on { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .opts { gap: 12px; font-size: 13px; }
+  .lvls { display: inline-flex; gap: 4px; align-items: center; }
+  .lvls .small { margin-right: 4px; }
+  .lvchip { height: 26px; padding: 0 9px; border-radius: 99px; font-size: 12px; gap: 6px; box-shadow: none; background: transparent; color: var(--dim); text-transform: capitalize; }
+  .lvchip .ldot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .5; }
+  .lvchip.on { background: var(--field); color: var(--text); border-color: var(--border-strong); }
+  .lvchip.error .ldot { background: var(--err); } .lvchip.warn .ldot { background: var(--warn); } .lvchip.info .ldot { background: var(--info); } .lvchip.debug .ldot { background: var(--debug); }
+  .lvchip.on .ldot { opacity: 1; }
   .scope { gap: 6px; }
   .chip { border-radius: 99px; }
   .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
@@ -143,5 +168,6 @@
   .hint { margin: 0; }
   .meta { margin: 16px 0 8px; gap: 14px; }
   .results { max-height: calc(100vh - 330px); min-height: 200px; }
-  .linkish { padding: 0; border: 0; font: inherit; color: var(--info); background: none; cursor: pointer; }
+  .linkish { padding: 0; border: 0; height: auto; font: inherit; color: var(--info); background: none; cursor: pointer; box-shadow: none; display: inline; text-align: left; width: 180px; overflow: hidden; text-overflow: ellipsis; }
+  .linkish:hover:not(:disabled) { background: none; text-decoration: underline; }
 </style>

@@ -2,6 +2,8 @@
   import { api } from '../lib/api.js'
   import { bytes, dur } from '../lib/fmt.js'
   import { app, setNode, go, can } from '../lib/state.svelte.js'
+  import Icon from '../lib/ui/Icon.svelte'
+  import { confirmDialog, promptDialog, toast } from '../lib/ui/overlay.svelte.js'
 
   let { refreshNodes } = $props()
   let name = $state('')
@@ -26,18 +28,19 @@
     busy = false
   }
   async function rename(n) {
-    const v = prompt('Node name', n.name)
+    const v = await promptDialog({ title: 'Rename node', label: 'Display name', value: n.name, icon: 'edit', validate: (x) => (x.trim() ? '' : 'Name is required') })
     if (!v) return
-    try { await api.patch('/api/nodes/' + n.id, { name: v }); await refreshNodes() } catch (e) { alert(e.message) }
+    try { await api.patch('/api/nodes/' + n.id, { name: v }); await refreshNodes(); toast('Node renamed') } catch (e) { toast(e.message, 'err') }
   }
   async function readdr(n) {
-    const v = prompt('Agent address (host:port)', n.addr)
+    const v = await promptDialog({ title: 'Change agent address', message: 'Use this when the server got a new IP. The pinned certificate stays the same.', label: 'Address (host:port)', value: n.addr, icon: 'server', mono: true })
     if (!v) return
-    try { await api.patch('/api/nodes/' + n.id, { addr: v }); await refreshNodes() } catch (e) { alert(e.message) }
+    try { await api.patch('/api/nodes/' + n.id, { addr: v }); await refreshNodes(); toast('Address updated') } catch (e) { toast(e.message, 'err') }
   }
   async function remove(n) {
-    if (!confirm(`Remove ${n.name}? To also revoke this hub on the agent run: strawlog agent unpair`)) return
-    try { await api.del('/api/nodes/' + n.id); await refreshNodes() } catch (e) { alert(e.message) }
+    const ok = await confirmDialog({ title: `Remove ${n.name}?`, message: 'The hub forgets this agent. To also revoke this hub on the server, run `strawlog agent unpair` there.', confirmLabel: 'Remove node', danger: true })
+    if (!ok) return
+    try { await api.del('/api/nodes/' + n.id); await refreshNodes(); toast(`${n.name} removed`) } catch (e) { toast(e.message, 'err') }
   }
 </script>
 
@@ -55,7 +58,7 @@
         {#each app.nodes as n (n.id)}
           <tr>
             <td><div class="row" style="gap:8px"><span class="dot" class:ok={n.online} class:err={!n.online}></span><b>{n.name || n.info?.hostname}</b>{#if n.local}<span class="badge">this machine</span>{/if}</div>
-              {#if n.fingerprint}<div class="dim mono small" title="Pinned agent certificate (SHA-256 prefix)">🔒 {n.fingerprint}</div>{/if}</td>
+              {#if n.fingerprint}<div class="dim mono small fp" title="Pinned agent certificate (SHA-256 prefix)"><Icon name="lock" size={12} /> {n.fingerprint}</div>{/if}</td>
             <td class="mono small">{n.local ? 'in-process' : n.addr}</td>
             <td class="small">{#if n.online}<span style="color:var(--ok)">online</span> · {n.latencyMs} ms · v{n.info.version} · up {dur(n.info.uptimeSec)}{:else}<span style="color:var(--err)" title={n.error}>{(n.error || 'offline').slice(0, 80)}</span>{/if}</td>
             <td>{#if n.online}{#if n.info.docker}<span class="badge ok">yes</span>{:else}<span class="badge" title={n.info.dockerError}>no</span>{/if}{/if}</td>
@@ -63,11 +66,11 @@
             <td>{#if n.online}{#if n.info.allowWrite}<span class="badge ok">read-write</span>{:else}<span class="badge">read-only</span>{/if}{/if}</td>
             <td class="num">{n.online ? bytes(n.info.totalBytes) : ''}</td>
             <td class="num">
-              <button class="sm" onclick={() => { setNode(n.id); go('/sources') }}>Open</button>
+              <button class="sm" onclick={() => { setNode(n.id); go('/sources') }}>Open <Icon name="chevronRight" size={13} /></button>
               {#if !n.local && can('admin')}
-                <button class="sm" onclick={() => rename(n)}>Rename</button>
-                <button class="sm" onclick={() => readdr(n)}>Address</button>
-                <button class="sm danger" onclick={() => remove(n)}>Remove</button>
+                <button class="sm ghost icon-btn" title="Rename" aria-label="Rename" onclick={() => rename(n)}><Icon name="edit" size={14} /></button>
+                <button class="sm ghost icon-btn" title="Change address" aria-label="Change address" onclick={() => readdr(n)}><Icon name="server" size={14} /></button>
+                <button class="sm ghost icon-btn danger" title="Remove" aria-label="Remove" onclick={() => remove(n)}><Icon name="trash" size={14} /></button>
               {/if}
             </td>
           </tr>
@@ -113,5 +116,6 @@ docker compose exec strawlog-agent strawlog agent pair</pre></li>
 <style>
   .form { display: flex; flex-direction: column; gap: 12px; }
   .small { font-size: 12px; }
+  .fp { display: flex; align-items: center; gap: 5px; margin-top: 2px; padding-left: 16px; }
   .steps { padding-left: 18px; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 </style>

@@ -3,13 +3,16 @@
   import { api } from '../lib/api.js'
   import { ago } from '../lib/fmt.js'
   import { app } from '../lib/state.svelte.js'
+  import Icon from '../lib/ui/Icon.svelte'
+  import Switch from '../lib/ui/Switch.svelte'
+  import Segmented from '../lib/ui/Segmented.svelte'
+  import { confirmDialog, toast } from '../lib/ui/overlay.svelte.js'
 
   let channels = $state([])
   let events = $state([])
   let publicUrl = $state('')
   let edit = $state(null)
   let error = $state('')
-  let msg = $state('')
   let busy = $state('')
   let test = $state(null)
 
@@ -68,8 +71,7 @@
     try {
       const r = edit.id ? await api.put('/api/notifications/' + edit.id, body(edit)) : await api.post('/api/notifications', body(edit))
       channels = r.channels
-      msg = 'Saved.'
-      setTimeout(() => (msg = ''), 3000)
+      toast('Channel saved')
       edit = null
     } catch (e) { error = e.message }
     busy = ''
@@ -78,7 +80,7 @@
     try { channels = (await api.put('/api/notifications/' + c.id, body({ ...c, url: '', enabled: !c.enabled }))).channels } catch (e) { error = e.message }
   }
   async function remove(c) {
-    if (!confirm(`Delete channel "${c.name}"?`)) return
+    if (!(await confirmDialog({ title: `Delete "${c.name}"?`, message: 'No more notifications will be sent to this webhook.', confirmLabel: 'Delete channel', danger: true }))) return
     try { channels = (await api.del('/api/notifications/' + c.id)).channels; if (edit?.id === c.id) edit = null } catch (e) { error = e.message }
   }
   const label = (id) => events.find((e) => e.id === id)?.label || id
@@ -87,10 +89,9 @@
 <div class="page">
   <div class="page-head">
     <div><h1>Notifications</h1><p class="sub">Send alerts to Discord or Microsoft Teams through webhooks. The hub checks all nodes every few minutes and only notifies about <i>changes</i>.</p></div>
-    <button class="primary" onclick={startNew}>Add channel</button>
+    <button class="primary" onclick={startNew}><Icon name="plus" size={15} /> Add channel</button>
   </div>
   {#if error}<div class="alert err" style="margin-bottom:12px">{error}</div>{/if}
-  {#if msg}<div class="alert ok" style="margin-bottom:12px">{msg}</div>{/if}
   {#if !publicUrl}
     <div class="dim small" style="margin-bottom:12px">Tip: set <code>STRAWLOG_PUBLIC_URL</code> on the hub to add an "Open Straw Log" link to every message.</div>
   {/if}
@@ -98,14 +99,14 @@
   <div class="grid cols-2">
     <div class="list">
       {#if channels.length === 0}
-        <div class="card empty">No channels yet. Add a Discord or Teams webhook to get alerts.</div>
+        <div class="card empty"><div class="ei"><Icon name="bell" size={22} /></div>No channels yet.<span class="dim small">Add a Discord or Teams webhook to get alerts.</span></div>
       {/if}
       {#each channels as c (c.id)}
         <div class="card ch" class:sel={edit?.id === c.id}>
           <div class="row">
             <span class="tbadge" style="background:{types[c.type]?.color}">{types[c.type]?.label}</span>
             <b class="grow trunc">{c.name}</b>
-            <label class="check small"><input type="checkbox" checked={c.enabled} onchange={() => toggle(c)} /> enabled</label>
+            <Switch checked={c.enabled} onchange={() => toggle(c)} size="sm" title={c.enabled ? 'Enabled' : 'Disabled'} />
           </div>
           <div class="mono dim small trunc">{c.urlHint}</div>
           <div class="chips">
@@ -116,12 +117,12 @@
             {#if c.last} · last delivery {ago(c.last.at)}: {#if c.last.ok}<span style="color:var(--ok)">ok</span>{:else}<span style="color:var(--err)">{c.last.error}</span>{/if}{/if}
           </div>
           {#if test && test.for === c.id && !edit}
-            <div class="alert {test.ok ? 'ok' : 'err'} small">{test.ok ? 'Test message delivered.' : 'Test failed: ' + test.error}</div>
+            <div class="alert {test.ok ? 'ok' : 'err'} small"><Icon name={test.ok ? 'ok' : 'alert'} size={15} /><span>{test.ok ? 'Test message delivered.' : 'Test failed: ' + test.error}</span></div>
           {/if}
           <div class="row">
-            <button class="sm" onclick={() => sendTest(c)} disabled={!!busy}>{#if busy === 'test:' + c.id}<span class="spin"></span>{/if} Send test</button>
-            <button class="sm" onclick={() => startEdit(c)}>Edit</button>
-            <button class="sm danger" onclick={() => remove(c)}>Delete</button>
+            <button class="sm" onclick={() => sendTest(c)} disabled={!!busy}>{#if busy === 'test:' + c.id}<span class="spin"></span>{:else}<Icon name="send" size={13} />{/if} Send test</button>
+            <button class="sm" onclick={() => startEdit(c)}><Icon name="edit" size={13} /> Edit</button>
+            <button class="sm ghost icon-btn danger right" title="Delete" aria-label="Delete channel" onclick={() => remove(c)}><Icon name="trash" size={14} /></button>
           </div>
         </div>
       {/each}
@@ -130,11 +131,7 @@
     {#if edit}
       <div class="card editor">
         <h2>{edit.id ? 'Edit channel' : 'New channel'}</h2>
-        <div class="seg">
-          {#each Object.entries(types) as [id, t]}
-            <button type="button" class:on={edit.type === id} onclick={() => { if (edit.type !== id) { edit.type = id; edit.url = '' } }}>{t.label}</button>
-          {/each}
-        </div>
+        <Segmented block value={edit.type} options={Object.entries(types).map(([value, t]) => ({ value, label: t.label }))} onchange={(v) => { edit.type = v; edit.url = '' }} label="Channel type" />
         <label class="field">Name <input bind:value={edit.name} placeholder="e.g. #ops-alerts" /></label>
         <label class="field">Webhook URL
           <input class="mono" type="password" bind:value={edit.url} autocomplete="off" placeholder={edit.id ? `unchanged (${edit.urlHint})` : types[edit.type].placeholder} />
@@ -156,18 +153,18 @@
 
         <h3>Nodes</h3>
         <div class="chips">
-          <button type="button" class="chip sm" class:on={edit.nodes.length === 0} onclick={() => (edit.nodes = [])}>All nodes</button>
+          <button type="button" class="chip" class:on={edit.nodes.length === 0} onclick={() => (edit.nodes = [])}>All nodes</button>
           {#each app.nodes as n}
-            <button type="button" class="chip sm" class:on={edit.nodes.includes(n.id)} onclick={() => toggleNode(n.id)}>{n.name || n.info?.hostname || n.id}</button>
+            <button type="button" class="chip" class:on={edit.nodes.includes(n.id)} onclick={() => toggleNode(n.id)}>{n.name || n.info?.hostname || n.id}</button>
           {/each}
         </div>
-        <label class="check"><input type="checkbox" bind:checked={edit.enabled} /> Enabled</label>
+        <Switch bind:checked={edit.enabled} label="Enabled" />
 
         {#if test && test.for === (edit.id || 'new')}
-          <div class="alert {test.ok ? 'ok' : 'err'}">{test.ok ? 'Test message delivered — check the channel.' : 'Test failed: ' + test.error}</div>
+          <div class="alert {test.ok ? 'ok' : 'err'}"><Icon name={test.ok ? 'ok' : 'alert'} size={16} /><span>{test.ok ? 'Test message delivered — check the channel.' : 'Test failed: ' + test.error}</span></div>
         {/if}
         <div class="row">
-          <button onclick={() => sendTest(edit)} disabled={!!busy || (!edit.url && !edit.id)}>{#if busy.startsWith('test')}<span class="spin"></span>{/if} Send test</button>
+          <button onclick={() => sendTest(edit)} disabled={!!busy || (!edit.url && !edit.id)}>{#if busy.startsWith('test')}<span class="spin"></span>{:else}<Icon name="send" size={14} />{/if} Send test</button>
           <button class="primary" onclick={save} disabled={!!busy || !edit.name || !edit.events.length || (!edit.url && !edit.id)}>Save</button>
           <button class="ghost" onclick={() => (edit = null)}>Cancel</button>
         </div>
@@ -181,20 +178,13 @@
   .ch { display: flex; flex-direction: column; gap: 8px; }
   .ch.sel { border-color: var(--accent); }
   .tbadge { color: #fff; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
-  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
-  .chip { border-radius: 99px; }
-  .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   .small { font-size: 12px; }
   .editor { display: flex; flex-direction: column; gap: 10px; }
   .editor h3 { margin: 10px 0 0; }
   .hint { margin: -4px 0 0; }
-  .seg { display: flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
-  .seg button { flex: 1; border: 0; border-radius: 0; justify-content: center; background: var(--bg2); }
-  .seg button + button { border-left: 1px solid var(--border); }
-  .seg button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
   .egroup { display: flex; flex-direction: column; gap: 4px; }
   .gname { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); margin-top: 4px; }
-  .ev { display: flex; gap: 10px; align-items: flex-start; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .ev { display: flex; gap: 11px; align-items: flex-start; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--r-md); transition: border-color .12s, background .12s; cursor: pointer; font-size: 13px; }
   .ev.on { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, transparent); }
   .ev input { margin-top: 3px; }
 </style>

@@ -2,6 +2,8 @@
   import { onMount } from 'svelte'
   import { api } from '../lib/api.js'
   import { app, go, nodeName } from '../lib/state.svelte.js'
+  import Icon from '../lib/ui/Icon.svelte'
+  import Segmented from '../lib/ui/Segmented.svelte'
 
   let findings = $state(null)
   let error = $state('')
@@ -24,27 +26,25 @@
   <div class="page-head">
     <div><h1>Health</h1><p class="sub">Problems found on <b>{nodeName(app.node)}</b>: unbounded logs, missing rotation, noisy apps, full disks.</p></div>
     <div class="row">
-      {#each [['', 'All'], ['critical', 'Critical'], ['warning', 'Warnings'], ['info', 'Info']] as [k, label]}
-        <button class:primary={sev === k} onclick={() => (sev = k)}>{label}{k && counts[k] ? ` (${counts[k]})` : ''}</button>
-      {/each}
-      <button onclick={load}>Re-check</button>
+      <Segmented bind:value={sev} label="Severity" options={[['', 'All'], ['critical', 'Critical'], ['warning', 'Warnings'], ['info', 'Info']].map(([value, l]) => ({ value, label: value && counts[value] ? `${l} · ${counts[value]}` : l }))} />
+      <button onclick={load}><Icon name="refresh" size={15} /> Re-check</button>
     </div>
   </div>
   {#if error}<div class="alert err">{error}</div>{/if}
   {#if !findings}
     <div class="empty"><span class="spin"></span></div>
   {:else if shown.length === 0}
-    <div class="card empty">✓ Nothing to report{sev ? ' at this level' : ''}.</div>
+    <div class="card empty"><div class="ei" style="color:var(--ok)"><Icon name="ok" size={22} /></div>Nothing to report{sev ? ' at this level' : ''}.</div>
   {:else}
     <div class="list">
       {#each shown as f, i}
         <div class="card f {f.severity}">
           <div class="row">
-            <span class="badge {f.severity}">{f.severity}</span>
+            <span class="sicon {f.severity}"><Icon name={f.severity === 'info' ? 'info' : 'alert'} size={16} /></span>
             <b class="grow">{f.title}</b>
             {#if f.sourceId}
-              <button class="sm" onclick={() => go('/logs', { source: f.sourceId })}>View logs</button>
-              <button class="sm" onclick={() => go('/policies', { source: f.sourceId })}>Add policy</button>
+              <button class="sm" onclick={() => go('/logs', { source: f.sourceId })}><Icon name="logs" size={13} /> Logs</button>
+              <button class="sm" onclick={() => go('/policies', { source: f.sourceId })}><Icon name="retention" size={13} /> Policy</button>
             {/if}
             {#if f.fix}<button class="sm" onclick={() => (open[i] = !open[i])}>{open[i] ? 'Hide fix' : 'How to fix'}</button>{/if}
           </div>
@@ -58,8 +58,10 @@
 
 <style>
   .list { display: flex; flex-direction: column; gap: 8px; }
-  .f { padding: 12px 14px; border-left: 3px solid var(--info); }
-  .f.critical { border-left-color: var(--err); }
-  .f.warning { border-left-color: var(--warn); }
-  .d { margin: 6px 0 0; font-size: 13px; }
+  .f { padding: 14px 16px; }
+  .sicon { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; flex: none; color: var(--info); background: color-mix(in srgb, var(--info) 14%, transparent); }
+  .sicon.critical { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
+  .sicon.warning { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+  .d { margin: 6px 0 0 38px; font-size: 13px; }
+  .f pre { margin-left: 38px; }
 </style>

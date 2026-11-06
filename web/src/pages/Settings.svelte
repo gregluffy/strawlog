@@ -1,6 +1,8 @@
 <script>
   import { api } from '../lib/api.js'
   import { app, save } from '../lib/state.svelte.js'
+  import Segmented from '../lib/ui/Segmented.svelte'
+  import { toast } from '../lib/ui/overlay.svelte.js'
 
   let current = $state('')
   let next = $state('')
@@ -21,7 +23,7 @@
     if (next !== next2) { error = 'New passwords do not match'; return }
     try {
       await api.post('/api/password', { current, new: next })
-      msg = 'Password changed. Your other sessions were signed out.'
+      toast('Password changed. Your other sessions were signed out.')
       current = next = next2 = ''
     } catch (err) { error = err.message }
   }
@@ -43,9 +45,9 @@
     </form>
     <div class="card form">
       <h2>Appearance</h2>
-      <label class="field">Theme
-        <select bind:value={theme}><option value="auto">System</option><option value="dark">Dark</option><option value="light">Light</option></select>
-      </label>
+      <div class="field">Theme
+        <Segmented bind:value={theme} label="Theme" options={[{ value: 'auto', label: 'System', icon: 'monitor' }, { value: 'dark', label: 'Dark', icon: 'moon' }, { value: 'light', label: 'Light', icon: 'sun' }]} />
+      </div>
       <h2 style="margin-top:12px">Security model</h2>
       <ul class="muted small list">
         <li>Hub ↔ agent: TLS 1.3 with mutual certificates, both sides pinned by SHA-256 fingerprint.</li>
@@ -59,6 +61,7 @@
 </div>
 
 <style>
+  div.field { align-items: flex-start; }
   .form { display: flex; flex-direction: column; gap: 12px; }
   .small { font-size: 12.5px; }
   .list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }

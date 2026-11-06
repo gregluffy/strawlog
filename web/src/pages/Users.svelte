@@ -3,10 +3,12 @@
   import { api } from '../lib/api.js'
   import { ago } from '../lib/fmt.js'
   import { app } from '../lib/state.svelte.js'
+  import Icon from '../lib/ui/Icon.svelte'
+  import Select from '../lib/ui/Select.svelte'
+  import { confirmDialog, promptDialog, toast } from '../lib/ui/overlay.svelte.js'
 
   let users = $state([])
   let error = $state('')
-  let msg = $state('')
   let form = $state({ username: '', password: '', role: 'viewer' })
   let busy = $state(false)
 
@@ -21,7 +23,8 @@
   }
   onMount(load)
 
-  function flash(t) { msg = t; setTimeout(() => (msg = ''), 3500) }
+  const flash = (t) => toast(t)
+  let roleOpts = $derived(roles.map((r) => ({ value: r.id, label: r.label, hint: r.desc })))
 
   async function create(e) {
     e.preventDefault()
@@ -39,12 +42,12 @@
     error = ''
     try { await api.patch('/api/users/' + u.id, body); flash(note); await load() } catch (e) { error = e.message; await load() }
   }
-  function resetPw(u) {
-    const pw = prompt(`New password for ${u.username} (min. 10 characters)`)
+  async function resetPw(u) {
+    const pw = await promptDialog({ title: `Reset password for ${u.username}`, message: 'Their active sessions will be signed out.', label: 'New password (min. 10 characters)', type: 'password', icon: 'key', confirmLabel: 'Reset password', validate: (v) => (v.length < 10 ? 'At least 10 characters' : '') })
     if (pw) patch(u, { password: pw }, `Password of ${u.username} reset; their sessions were ended.`)
   }
   async function remove(u) {
-    if (!confirm(`Delete user ${u.username}?`)) return
+    if (!(await confirmDialog({ title: `Delete ${u.username}?`, message: 'They lose access immediately. This cannot be undone.', confirmLabel: 'Delete user', danger: true }))) return
     error = ''
     try { await api.del('/api/users/' + u.id); flash(`${u.username} deleted.`); await load() } catch (e) { error = e.message }
   }
@@ -60,7 +63,6 @@
     <div><h1>Users</h1><p class="sub">Who can sign in to this dashboard, and what they may do. Roles are enforced by the hub API, not just hidden in the UI.</p></div>
   </div>
   {#if error}<div class="alert err" style="margin-bottom:12px">{error}</div>{/if}
-  {#if msg}<div class="alert ok" style="margin-bottom:12px">{msg}</div>{/if}
 
   <div class="card tight" style="margin-bottom:16px; overflow-x:auto">
     <table>
@@ -69,21 +71,22 @@
         {#each users as u (u.id)}
           {@const me = u.id === app.user?.id}
           <tr>
-            <td><b>{u.username}</b> {#if me}<span class="badge info">you</span>{/if}</td>
+            <td><div class="row" style="gap:10px"><span class="av">{u.username.slice(0, 2).toUpperCase()}</span><b>{u.username}</b>{#if me}<span class="badge accent">you</span>{/if}</div></td>
             <td>
-              <select value={u.role} disabled={me} onchange={(e) => patch(u, { role: e.currentTarget.value }, `${u.username} is now ${e.currentTarget.value}.`)} title={me ? "You can't change your own role" : ''}>
-                {#each roles as r}<option value={r.id}>{r.label}</option>{/each}
-              </select>
+              <Select value={u.role} options={roleOpts} size="sm" disabled={me} menuWidth={300} title={me ? "You can't change your own role" : ''}
+                onchange={(v) => patch(u, { role: v }, `${u.username} is now ${v}.`)} />
             </td>
             <td>{#if u.disabled}<span class="badge err">disabled</span>{:else}<span class="badge ok">active</span>{/if}</td>
             <td class="muted">{u.lastLogin ? ago(u.lastLogin) : 'never'}</td>
             <td class="muted">{ago(u.createdAt)}</td>
             <td class="num">
-              <button class="sm" onclick={() => resetPw(u)}>Reset password</button>
-              {#if !me}
-                <button class="sm" onclick={() => patch(u, { disabled: !u.disabled }, `${u.username} ${u.disabled ? 'enabled' : 'disabled'}.`)}>{u.disabled ? 'Enable' : 'Disable'}</button>
-                <button class="sm danger" onclick={() => remove(u)}>Delete</button>
-              {/if}
+              <span class="actions">
+                <button class="sm" onclick={() => resetPw(u)}><Icon name="key" size={13} /> Reset password</button>
+                {#if !me}
+                  <button class="sm" onclick={() => patch(u, { disabled: !u.disabled }, `${u.username} ${u.disabled ? 'enabled' : 'disabled'}.`)}>{u.disabled ? 'Enable' : 'Disable'}</button>
+                  <button class="sm ghost icon-btn danger" title="Delete user" aria-label="Delete user" onclick={() => remove(u)}><Icon name="trash" size={14} /></button>
+                {/if}
+              </span>
             </td>
           </tr>
         {/each}
@@ -91,12 +94,12 @@
     </table>
   </div>
 
-  <div class="grid cols-2">
+  <div class="addu">
     <form class="card form" onsubmit={create}>
       <h2>Add user</h2>
       <label class="field">Username <input bind:value={form.username} autocomplete="off" pattern="[a-zA-Z0-9._\-]{'{2,32}'}" required /></label>
       <label class="field">Initial password (min. 10)
-        <div class="row"><input class="grow mono" bind:value={form.password} autocomplete="new-password" minlength="10" required /><button type="button" onclick={genPw}>Generate</button></div>
+        <div class="row"><input class="grow mono" bind:value={form.password} autocomplete="new-password" minlength="10" required /><button type="button" onclick={genPw}><Icon name="key" size={14} /> Generate</button></div>
       </label>
       <div class="field">Role
         <div class="roles">
@@ -115,10 +118,12 @@
 </div>
 
 <style>
+  .addu { max-width: 720px; }
   .form { display: flex; flex-direction: column; gap: 12px; }
   .small { font-size: 12px; }
+  .av { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--hover); color: var(--muted); font-size: 11px; font-weight: 700; }
   .roles { display: flex; flex-direction: column; gap: 6px; color: var(--text); }
-  .role { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .role { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); transition: border-color .12s, background .12s; cursor: pointer; font-size: 13px; }
   .role.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .role input { margin-top: 3px; }
 </style>

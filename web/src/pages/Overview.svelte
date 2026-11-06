@@ -3,6 +3,7 @@
   import { api } from '../lib/api.js'
   import { bytes, pct, dur } from '../lib/fmt.js'
   import { go, setNode } from '../lib/state.svelte.js'
+  import Icon from '../lib/ui/Icon.svelte'
 
   let data = $state(null)
   let error = $state('')
@@ -38,7 +39,7 @@
 <div class="page">
   <div class="page-head">
     <div><h1>Overview</h1><p class="sub">All nodes, what's using disk and what needs attention.</p></div>
-    <button onclick={load} disabled={loading}>{#if loading}<span class="spin"></span>{/if} Refresh</button>
+    <button onclick={load} disabled={loading}>{#if loading}<span class="spin"></span>{:else}<Icon name="refresh" size={15} />{/if} Refresh</button>
   </div>
 
   {#if error}<div class="alert err">{error}</div>{/if}

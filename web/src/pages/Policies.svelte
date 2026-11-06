@@ -3,6 +3,10 @@
   import { api } from '../lib/api.js'
   import { bytes, ago } from '../lib/fmt.js'
   import { app, go, nodeName, can } from '../lib/state.svelte.js'
+  import Icon from '../lib/ui/Icon.svelte'
+  import Select from '../lib/ui/Select.svelte'
+  import Switch from '../lib/ui/Switch.svelte'
+  import { confirmDialog, toast } from '../lib/ui/overlay.svelte.js'
 
   let policies = $state([])
   let sources = $state([])
@@ -13,7 +17,6 @@
   let plan = $state(null)
   let busy = $state('')
   let error = $state('')
-  let msg = $state('')
 
   let apps = $derived([...new Set(sources.map((s) => s.app))].sort())
   let srcName = $derived(Object.fromEntries(sources.map((s) => [s.id, `${s.app} / ${s.name}`])))
@@ -70,8 +73,7 @@
     error = ''
     try {
       policies = await api.put(api.n(app.node, '/policies'), list.map(clean))
-      msg = note
-      setTimeout(() => (msg = ''), 3000)
+      toast(note)
       return true
     } catch (e) { error = e.message; return false } finally { busy = '' }
   }
@@ -82,7 +84,7 @@
     if (await saveAll(list, 'Saved. The agent enforces enabled policies on its own schedule.')) { edit = null; plan = null }
   }
   async function remove(i) {
-    if (!confirm(`Delete policy "${policies[i].name}"?`)) return
+    if (!(await confirmDialog({ title: 'Delete policy?', message: `"${policies[i].name}" will stop running on ${nodeName(app.node)}. Files are not touched.`, confirmLabel: 'Delete', danger: true }))) return
     await saveAll(policies.filter((_, j) => j !== i), 'Deleted.')
     if (editIdx === i) edit = null
   }
@@ -99,13 +101,14 @@
   }
   async function apply(ids) {
     const what = ids ? `policy "${policies.find((p) => p.id === ids[0])?.name}"` : 'all enabled policies'
-    if (!confirm(`Apply ${what} on ${nodeName(app.node)} now? Files will be deleted/truncated as shown in the preview.`)) return
+    if (!(await confirmDialog({ title: 'Run retention now?', message: `Apply ${what} on ${nodeName(app.node)}. Files will be deleted, compressed or truncated as shown in the preview. This can't be undone.`, confirmLabel: 'Run now', danger: true }))) return
     busy = 'apply'
     error = ''
     try {
       plan = await api.post(api.n(app.node, '/apply'), ids ? { policyIds: ids } : {})
       runs = await api.get(api.n(app.node, '/runs'))
       sources = await api.get(api.n(app.node, '/sources'))
+      toast(`Freed ${bytes(plan.freedBytes)} (${plan.actions.filter((a) => a.done).length} actions)`)
     } catch (e) { error = e.message }
     busy = ''
   }
@@ -153,7 +156,6 @@
     <div class="dim small" style="margin-bottom:12px">Writable paths: <span class="mono">{(info.writePaths || []).join(', ')}</span></div>
   {/if}
   {#if error}<div class="alert err" style="margin-bottom:12px">{error}</div>{/if}
-  {#if msg}<div class="alert ok" style="margin-bottom:12px">{msg}</div>{/if}
 
   <div class="grid cols-2">
     <div class="card tight">
@@ -166,17 +168,19 @@
             {#each policies as p, i (p.id)}
               <tr class:sel={editIdx === i && edit}>
                 <td>
-                  <label class="check"><input type="checkbox" checked={p.enabled} disabled={!can('operator')} onchange={() => toggle(i)} /> <b>{p.name}</b></label>
+                  <div class="pname"><Switch checked={p.enabled} disabled={!can('operator')} onchange={() => toggle(i)} size="sm" title={p.enabled ? 'Enabled' : 'Disabled'} /> <b>{p.name}</b></div>
                   <div class="dim small trunc" style="max-width:280px">{describe(p)}</div>
                 </td>
                 <td class="small muted">{rules(p)}</td>
                 <td class="num">
-                  <button class="sm" onclick={() => editPolicy(i)}>Edit</button>
-                  <button class="sm" onclick={() => preview(p)}>Preview</button>
+                  <span class="actions">
+                  <button class="sm ghost icon-btn" title="Edit" aria-label="Edit policy" onclick={() => editPolicy(i)}><Icon name="edit" size={15} /></button>
+                  <button class="sm ghost icon-btn" title="Preview (dry run)" aria-label="Preview policy" onclick={() => preview(p)}><Icon name="eye" size={15} /></button>
                   {#if can('operator')}
-                    <button class="sm" onclick={() => apply([p.id])} disabled={!info?.allowWrite || !!busy}>Run</button>
-                    <button class="sm danger" onclick={() => remove(i)}>✕</button>
+                    <button class="sm ghost icon-btn" title={info?.allowWrite ? 'Run now' : 'Node is read-only'} aria-label="Run policy now" onclick={() => apply([p.id])} disabled={!info?.allowWrite || !!busy}><Icon name="play" size={14} /></button>
+                    <button class="sm ghost icon-btn danger" aria-label="Delete policy" title="Delete" onclick={() => remove(i)}><Icon name="trash" size={14} /></button>
                   {/if}
+                  </span>
                 </td>
               </tr>
             {/each}
@@ -193,22 +197,21 @@
         <h3>Applies to</h3>
         <div class="chips">
           {#each ['docker', 'file', 'journal'] as k}
-            <button type="button" class="chip sm" class:on={edit.match.kinds.includes(k)} onclick={() => (edit.match.kinds = toggleIn(edit.match.kinds, k))}>{k}</button>
+            <button type="button" class="chip" class:on={edit.match.kinds.includes(k)} onclick={() => (edit.match.kinds = toggleIn(edit.match.kinds, k))}>{k}</button>
           {/each}
         </div>
         <div class="chips">
           {#each apps as a}
-            <button type="button" class="chip sm" class:on={edit.match.apps.includes(a)} onclick={() => (edit.match.apps = toggleIn(edit.match.apps, a))}>{a}</button>
+            <button type="button" class="chip" class:on={edit.match.apps.includes(a)} onclick={() => (edit.match.apps = toggleIn(edit.match.apps, a))}>{a}</button>
           {/each}
         </div>
         <label class="field">Specific sources
-          <select onchange={(e) => { if (e.currentTarget.value) edit.match.sources = [...new Set([...edit.match.sources, e.currentTarget.value])]; e.currentTarget.value = '' }}>
-            <option value="">+ add source…</option>
-            {#each sources as s}<option value={s.id}>{s.app} / {s.name}</option>{/each}
-          </select>
+          <Select block value={null} placeholder="Add a source…" icon="plus" searchable menuWidth={340}
+            options={sources.filter((s) => !edit.match.sources.includes(s.id)).map((s) => ({ value: s.id, label: s.name, hint: s.path, group: s.app }))}
+            onchange={(v) => (edit.match.sources = [...edit.match.sources, v])} />
         </label>
         {#if edit.match.sources.length}
-          <div class="chips">{#each edit.match.sources as s}<button type="button" class="chip sm on" onclick={() => (edit.match.sources = edit.match.sources.filter((x) => x !== s))}>{srcName[s] || s} ✕</button>{/each}</div>
+          <div class="chips">{#each edit.match.sources as s}<button type="button" class="chip on" onclick={() => (edit.match.sources = edit.match.sources.filter((x) => x !== s))}>{srcName[s] || s} <Icon name="x" size={12} /></button>{/each}</div>
         {/if}
         <label class="field">Path glob (optional) <input class="mono" bind:value={edit.match.pathGlob} placeholder="/var/log/nginx/*.log" /></label>
         <p class="dim small" style="margin:0">All conditions must match. Nothing selected = every source on the node.</p>
@@ -220,9 +223,11 @@
           <label class="field">Keep at most N rotated files<input type="number" min="0" bind:value={edit.maxRotated} /></label>
           <label class="field">Delete rotated older than (days)<input type="number" min="0" bind:value={edit.maxAgeDays} /></label>
         </div>
-        <label class="check"><input type="checkbox" bind:checked={edit.archiveBeforeTruncate} /> Keep a gzip archive before truncating the active file</label>
-        <label class="check"><input type="checkbox" bind:checked={edit.compressRotated} /> Gzip uncompressed rotated files (older than 1h)</label>
-        <label class="check"><input type="checkbox" bind:checked={edit.enabled} /> Enabled (runs automatically every hour)</label>
+        <div class="opts">
+          <Switch bind:checked={edit.archiveBeforeTruncate} label="Keep a gzip archive before truncating the active file" />
+          <Switch bind:checked={edit.compressRotated} label="Gzip uncompressed rotated files (older than 1h)" />
+          <Switch bind:checked={edit.enabled} label="Enabled — runs automatically every hour" />
+        </div>
         <p class="dim small" style="margin:0">0 = no limit. Active files are truncated in place (same inode), so running apps keep logging. Journald uses <code>journalctl --vacuum-*</code>.</p>
 
         <div class="row" style="margin-top:6px">
@@ -240,7 +245,7 @@
         <h2 style="margin:0">{plan.dryRun ? 'Preview' : 'Result'}</h2>
         <span class="badge {plan.dryRun ? 'info' : 'ok'}">{plan.dryRun ? 'dry run — nothing changed' : 'applied'}</span>
         <span class="muted">{plan.actions.length} actions · {plan.dryRun ? 'would free' : 'freed'} <b>{bytes(plan.freedBytes)}</b></span>
-        <button class="ghost sm right" onclick={() => (plan = null)}>✕</button>
+        <button class="ghost sm icon-btn right" aria-label="Close" onclick={() => (plan = null)}><Icon name="x" size={15} /></button>
       </div>
       {#if plan.actions.length === 0}
         <div class="empty">Nothing to do — everything is within limits.</div>
@@ -287,9 +292,8 @@
   .editor { display: flex; flex-direction: column; gap: 10px; }
   .editor h3 { margin: 8px 0 0; }
   .two { grid-template-columns: 1fr 1fr; gap: 10px; }
-  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
-  .chip { border-radius: 99px; }
-  .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .pname { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
+  .opts { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
   .small { font-size: 12px; }
   .ph { padding: 12px 14px; border-bottom: 1px solid var(--border); }
   tr.sel td { background: var(--panel2); }
