@@ -1,0 +1,81 @@
+# Straw Log — dashboard + local node on the same machine.
+# Add more servers later from the UI (Nodes → Add agent).
+#
+#   docker compose up -d
+#   docker compose logs strawlog | grep -A1 SETUP     # first-run setup token
+#   open http://localhost:8080
+
+name: strawlog
+
+services:
+  strawlog:
+    image: ${STRAWLOG_IMAGE:-strawlog:latest}
+    build: ../..
+    container_name: strawlog
+    command: ["hub"]
+    restart: unless-stopped
+    ports:
+      # localhost only by default. For LAN access use "8080:8080" and STRAWLOG_TLS=auto
+      # (or put it behind your reverse proxy with TLS and set STRAWLOG_SECURE_COOKIES=true).
+      - "127.0.0.1:8080:8080"
+    environment:
+      STRAWLOG_LOCAL: "true"
+      DOCKER_HOST: tcp://docker-proxy:2375
+      # STRAWLOG_TLS: auto                      # self-signed HTTPS for LAN use
+      # STRAWLOG_ADMIN_PASSWORD: ...            # optional first admin; otherwise a setup token is printed
+      # STRAWLOG_PUBLIC_URL: https://logs.example.lan   # link in Discord/Teams notifications
+      # STRAWLOG_EXTRA_PATHS: "myapp=/srv/myapp/logs,/opt/legacy/*.log"
+      # --- retention (cleanup). Off = strictly read-only. ---
+      STRAWLOG_ALLOW_WRITE: "false"
+      # STRAWLOG_WRITE_PATHS: /var/log,/var/lib/docker/containers,/var/lib/docker/volumes
+    volumes:
+      - strawlog-data:/data
+      # Host logs, mounted under /host. Read-only; change ':ro' to ':rw' for the
+      # directories you want retention policies to clean (and set STRAWLOG_ALLOW_WRITE=true).
+      - /var/log:/host/var/log:ro
+      - /var/lib/docker/containers:/host/var/lib/docker/containers:ro   # container log sizes + fast search
+      - /var/lib/docker/volumes:/host/var/lib/docker/volumes:ro         # logs inside named volumes
+      - /etc/hostname:/host/etc/hostname:ro
+      # - /run/log/journal:/host/run/log/journal:ro                      # volatile journal (if no /var/log/journal)
+      # Bind-mounted app logs: mount the directories your stacks live in, same path under /host:
+      # - /srv:/host/srv:ro
+      # - /opt:/host/opt:ro
+      # - /home/me/stacks:/host/home/me/stacks:ro
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add:
+      - DAC_READ_SEARCH          # read root-owned logs
+      # - DAC_OVERRIDE           # + these three only when STRAWLOG_ALLOW_WRITE=true
+      # - FOWNER
+      # - CHOWN
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1.0
+    depends_on: [docker-proxy]
+    networks: [default, docker-proxy]
+
+  # Read-only Docker API: only GET /containers/* (list, inspect, logs). No exec, no create, no POST.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      POST: 0
+      PING: 1
+      VERSION: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs: ["/run", "/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    networks: [docker-proxy]
+
+networks:
+  docker-proxy:
+    internal: true    # the proxy is unreachable from anywhere but the strawlog container
+
+volumes:
+  strawlog-data:

@@ -1,0 +1,32 @@
+# Straw Log — dashboard only (e.g. on your laptop / home server). It does not read
+# this machine's logs; it connects out to agents on your servers and VMs.
+#
+#   docker compose up -d && docker compose logs strawlog | grep -A1 SETUP
+
+name: strawlog-hub
+
+services:
+  strawlog:
+    image: ${STRAWLOG_IMAGE:-strawlog:latest}
+    build: ../..
+    container_name: strawlog
+    command: ["hub"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"   # "8080:8080" + STRAWLOG_TLS=auto to reach it from your LAN
+    environment:
+      STRAWLOG_LOCAL: "false"
+      # STRAWLOG_TLS: auto
+      # STRAWLOG_ADMIN_PASSWORD: ...           # optional first admin
+      # STRAWLOG_PUBLIC_URL: https://logs.example.lan
+    volumes:
+      - strawlog-data:/data      # hub password hash, pinned agent fingerprints, hub client key
+    read_only: true
+    tmpfs: ["/tmp:size=8m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    pids_limit: 64
+    mem_limit: 128m
+
+volumes:
+  strawlog-data:

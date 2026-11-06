@@ -1,0 +1,80 @@
+# Straw Log agent — run on every server / VM you want to see in the dashboard.
+#
+#   1. set STRAWLOG_ALLOW_FROM below to your hub's IP (or LAN / VPN range)
+#   2. docker compose up -d
+#   3. docker compose logs strawlog-agent | grep -A1 "PAIRING CODE"
+#      (new code any time: docker compose exec strawlog-agent strawlog agent pair)
+#   4. dashboard → Nodes → Add agent → <this-host>:7443 + code
+#
+# Firewall: allow 7443/tcp only from the hub. The agent talks mTLS only and answers
+# nothing but the paired hub(s).
+
+name: strawlog-agent
+
+services:
+  strawlog-agent:
+    image: ${STRAWLOG_IMAGE:-strawlog:latest}
+    build: ../..
+    container_name: strawlog-agent
+    command: ["agent"]
+    restart: unless-stopped
+    ports:
+      - "7443:7443"            # or "10.0.0.5:7443:7443" to bind a single (VPN/LAN) interface
+    environment:
+      STRAWLOG_MODE: agent
+      STRAWLOG_LISTEN: ":7443"
+      # Drop connections from anywhere else before the TLS handshake. Comma separated IPs/CIDRs.
+      STRAWLOG_ALLOW_FROM: "192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,100.64.0.0/10"
+      DOCKER_HOST: tcp://docker-proxy:2375
+      # STRAWLOG_EXTRA_PATHS: "myapp=/srv/myapp/logs"
+      # --- retention (cleanup) — read-only unless enabled ---
+      STRAWLOG_ALLOW_WRITE: "false"
+      # STRAWLOG_WRITE_PATHS: /var/log,/var/lib/docker/containers,/var/lib/docker/volumes
+    volumes:
+      - strawlog-agent-data:/data      # agent identity key + paired hubs + policies + history
+      # change ':ro' to ':rw' where retention should be allowed to clean up
+      - /var/log:/host/var/log:ro
+      - /var/lib/docker/containers:/host/var/lib/docker/containers:ro
+      - /var/lib/docker/volumes:/host/var/lib/docker/volumes:ro
+      - /etc/hostname:/host/etc/hostname:ro
+      # - /run/log/journal:/host/run/log/journal:ro
+      # bind-mounted app logs (same path under /host):
+      # - /srv:/host/srv:ro
+      # - /opt:/host/opt:ro
+    read_only: true
+    tmpfs: ["/tmp:size=16m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add:
+      - DAC_READ_SEARCH
+      # - DAC_OVERRIDE    # only with STRAWLOG_ALLOW_WRITE=true
+      # - FOWNER
+      # - CHOWN
+    pids_limit: 128
+    mem_limit: 192m
+    cpus: 0.5
+    depends_on: [docker-proxy]
+    networks: [default, docker-proxy]
+
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      POST: 0
+      PING: 1
+      VERSION: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs: ["/run", "/tmp"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 64m
+    networks: [docker-proxy]
+
+networks:
+  docker-proxy:
+    internal: true
+
+volumes:
+  strawlog-agent-data:

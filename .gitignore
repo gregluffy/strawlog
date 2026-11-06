@@ -1,0 +1,6 @@
+web/node_modules/
+internal/hub/dist/*
+!internal/hub/dist/.keep
+/strawlog
+/dist/
+.devdata/
