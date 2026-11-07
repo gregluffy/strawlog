@@ -56,3 +56,22 @@ export function highlight(text, query, regex, caseSensitive) {
   if (last < text.length) out.push({ t: text.slice(last), m: false })
   return out
 }
+
+export function until(unix) {
+  if (!unix) return '–'
+  const s = unix - Date.now() / 1000
+  if (s < 60) return 'due now'
+  if (s < 3600) return 'in ' + Math.ceil(s / 60) + 'm'
+  if (s < 86400) {
+    const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60)
+    return 'in ' + h + 'h' + (m ? ' ' + m + 'm' : '')
+  }
+  return 'in ' + Math.round(s / 86400) + 'd'
+}
+
+export function every(min) {
+  if (!min) return '–'
+  if (min % 1440 === 0) return min === 1440 ? 'daily' : `every ${min / 1440}d`
+  if (min % 60 === 0) return min === 60 ? 'hourly' : `every ${min / 60}h`
+  return `every ${min}m`
+}

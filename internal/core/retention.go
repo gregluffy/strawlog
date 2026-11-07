@@ -101,7 +101,9 @@ func validatePolicy(p *api.Policy) error {
 	return nil
 }
 
-func (c *Core) Policies(ctx context.Context) ([]api.Policy, error) { return c.policies.get(), nil }
+func (c *Core) Policies(ctx context.Context) ([]api.Policy, error) {
+	return c.withTimes(c.policies.get()), nil
+}
 
 func (c *Core) SetPolicies(ctx context.Context, list []api.Policy) error {
 	seen := map[string]bool{}
@@ -109,12 +111,21 @@ func (c *Core) SetPolicies(ctx context.Context, list []api.Policy) error {
 		if err := validatePolicy(&list[i]); err != nil {
 			return err
 		}
+		if err := normalizeSchedule(&list[i].Schedule, c.cfg.RetentionInterval); err != nil {
+			return fmt.Errorf("policy %q: %w", list[i].Name, err)
+		}
+		list[i].LastRun, list[i].NextRun = 0, 0
 		if seen[list[i].ID] {
 			list[i].ID = randID()
 		}
 		seen[list[i].ID] = true
 	}
-	return c.policies.set(list)
+	old := c.policies.get()
+	if err := c.policies.set(list); err != nil {
+		return err
+	}
+	c.sched.reanchor(old, list, time.Now())
+	return nil
 }
 
 func (c *Core) Runs(ctx context.Context) ([]api.Plan, error) {

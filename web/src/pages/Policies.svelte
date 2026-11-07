@@ -1,11 +1,12 @@
 <script>
   import { onMount } from 'svelte'
   import { api } from '../lib/api.js'
-  import { bytes, ago } from '../lib/fmt.js'
+  import { bytes, ago, until, every } from '../lib/fmt.js'
   import { app, go, nodeName, can } from '../lib/state.svelte.js'
   import Icon from '../lib/ui/Icon.svelte'
   import Select from '../lib/ui/Select.svelte'
   import Switch from '../lib/ui/Switch.svelte'
+  import Segmented from '../lib/ui/Segmented.svelte'
   import { confirmDialog, toast } from '../lib/ui/overlay.svelte.js'
 
   let policies = $state([])
@@ -19,6 +20,12 @@
   let error = $state('')
 
   let apps = $derived([...new Set(sources.map((s) => s.app))].sort())
+  const presets = [15, 30, 60, 120, 180, 360, 720]
+  let intervalOpts = $derived(
+    [...new Set([...presets, ...(edit?.schedule?.everyMin ? [edit.schedule.everyMin] : [])])]
+      .sort((a, b) => a - b)
+      .map((m) => ({ value: m, label: every(m).replace(/^./, (c) => c.toUpperCase()) })),
+  )
   let srcName = $derived(Object.fromEntries(sources.map((s) => [s.id, `${s.app} / ${s.name}`])))
 
   async function load() {
@@ -42,7 +49,7 @@
   $effect(() => { if (app.node !== lastNode) { lastNode = app.node; edit = null; plan = null; load() } })
 
   function blank() {
-    return { id: '', name: '', enabled: true, match: { apps: [], kinds: [], sources: [], pathGlob: '' }, maxAgeDays: 0, maxRotated: 0, compressRotated: false, maxActiveMB: 0, archiveBeforeTruncate: true, maxTotalMB: 0 }
+    return { id: '', name: '', enabled: true, schedule: { mode: 'interval', everyMin: 60, at: '03:00' }, match: { apps: [], kinds: [], sources: [], pathGlob: '' }, maxAgeDays: 0, maxRotated: 0, compressRotated: false, maxActiveMB: 0, archiveBeforeTruncate: true, maxTotalMB: 0 }
   }
   function newPolicy(s) {
     const p = blank()
@@ -59,12 +66,19 @@
   function editPolicy(i) {
     edit = JSON.parse(JSON.stringify(policies[i]))
     edit.match = { apps: [], kinds: [], sources: [], pathGlob: '', ...edit.match }
+    edit.schedule = { mode: 'interval', everyMin: 60, at: '03:00', ...edit.schedule }
+    if (!edit.schedule.everyMin) edit.schedule.everyMin = 60
+    if (!edit.schedule.at) edit.schedule.at = '03:00'
     editIdx = i
     plan = null
   }
   function clean(p) {
     const c = JSON.parse(JSON.stringify(p))
     for (const k of ['maxAgeDays', 'maxRotated', 'maxActiveMB', 'maxTotalMB']) c[k] = Number(c[k]) || 0
+    delete c.lastRun
+    delete c.nextRun
+    const sc = c.schedule || {}
+    c.schedule = sc.mode === 'daily' ? { mode: 'daily', at: sc.at || '03:00' } : { mode: 'interval', everyMin: Number(sc.everyMin) || 60 }
     return c
   }
 
@@ -81,7 +95,8 @@
     const list = [...policies]
     if (editIdx >= 0) list[editIdx] = edit
     else list.push(edit)
-    if (await saveAll(list, 'Saved. The agent enforces enabled policies on its own schedule.')) { edit = null; plan = null }
+    const note = edit.enabled ? `Saved. Runs ${schedText(edit.schedule)} on ${nodeName(app.node)}.` : 'Saved as disabled. It only runs when you start it.'
+    if (await saveAll(list, note)) { edit = null; plan = null }
   }
   async function remove(i) {
     if (!(await confirmDialog({ title: 'Delete policy?', message: `"${policies[i].name}" will stop running on ${nodeName(app.node)}. Files are not touched.`, confirmLabel: 'Delete', danger: true }))) return
@@ -113,6 +128,10 @@
     busy = ''
   }
 
+  function schedText(sc) {
+    if (!sc) return ''
+    return sc.mode === 'daily' ? `daily at ${sc.at}` : every(Number(sc.everyMin) || 60)
+  }
   function toggleIn(arr, v) { return arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v] }
   function describe(p) {
     const m = p.match || {}
@@ -137,7 +156,7 @@
 
 <div class="page">
   <div class="page-head">
-    <div><h1>Retention</h1><p class="sub">Policies live on <b>{nodeName(app.node)}</b> and run there every hour, even when this dashboard is offline.</p></div>
+    <div><h1>Retention</h1><p class="sub">Policies live on <b>{nodeName(app.node)}</b> and run there on their own schedule, even when this dashboard is offline.</p></div>
     <div class="row">
       <button onclick={() => preview(null)} disabled={!!busy || !policies.length}>{#if busy === 'plan' && !edit}<span class="spin"></span>{/if} Preview all</button>
       {#if can('operator')}
@@ -163,7 +182,7 @@
         <div class="empty">No policies yet. Start from a source on the <a href="#/sources">Sources</a> page or create one.</div>
       {:else}
         <table>
-          <thead><tr><th>Policy</th><th>Rules</th><th></th></tr></thead>
+          <thead><tr><th>Policy</th><th>Rules</th><th>Schedule</th><th></th></tr></thead>
           <tbody>
             {#each policies as p, i (p.id)}
               <tr class:sel={editIdx === i && edit}>
@@ -172,6 +191,12 @@
                   <div class="dim small trunc" style="max-width:280px">{describe(p)}</div>
                 </td>
                 <td class="small muted">{rules(p)}</td>
+                <td class="small sched">
+                  <div class:dim={!p.enabled}>{schedText(p.schedule).replace(/^./, (c) => c.toUpperCase())}</div>
+                  <div class="dim" title={p.lastRun ? `Last scheduled run ${ago(p.lastRun)}` : 'Not run on schedule yet'}>
+                    {#if !p.enabled}disabled{:else if !info?.allowWrite}on hold · read-only node{:else if p.nextRun}next {until(p.nextRun)}{/if}
+                  </div>
+                </td>
                 <td class="num">
                   <span class="actions">
                   <button class="sm ghost icon-btn" title="Edit" aria-label="Edit policy" onclick={() => editPolicy(i)}><Icon name="edit" size={15} /></button>
@@ -192,9 +217,27 @@
     {#if edit}
       <div class="card editor">
         <h2>{editIdx >= 0 ? 'Edit policy' : 'New policy'}</h2>
+
+        <div class="status" class:on={edit.enabled}>
+          <div class="status-text">
+            <b>{edit.enabled ? 'Enabled' : 'Disabled'}</b>
+            <span class="dim small">
+              {#if !edit.enabled}
+                Paused. Nothing runs automatically, but you can still run it by hand with <Icon name="play" size={11} /> or <b>Apply all now</b>.
+              {:else if info && !info.allowWrite}
+                Will run {schedText(edit.schedule)}, but it's on hold while this node is read-only.
+              {:else}
+                Runs automatically {schedText(edit.schedule)} on {nodeName(app.node)}.
+              {/if}
+            </span>
+          </div>
+          <Switch bind:checked={edit.enabled} title={edit.enabled ? 'Disable policy' : 'Enable policy'} />
+        </div>
+
+        <h3>Settings</h3>
         <label class="field">Name <input bind:value={edit.name} placeholder="e.g. Keep nginx under 1 GB" /></label>
 
-        <h3>Applies to</h3>
+        <h4>Applies to</h4>
         <div class="chips">
           {#each ['docker', 'file', 'journal'] as k}
             <button type="button" class="chip" class:on={edit.match.kinds.includes(k)} onclick={() => (edit.match.kinds = toggleIn(edit.match.kinds, k))}>{k}</button>
@@ -216,7 +259,7 @@
         <label class="field">Path glob (optional) <input class="mono" bind:value={edit.match.pathGlob} placeholder="/var/log/nginx/*.log" /></label>
         <p class="dim small" style="margin:0">All conditions must match. Nothing selected = every source on the node.</p>
 
-        <h3>Rules</h3>
+        <h4>Rules</h4>
         <div class="grid two">
           <label class="field">Max active file size (MB)<input type="number" min="0" bind:value={edit.maxActiveMB} /></label>
           <label class="field">Max total size incl. rotated (MB)<input type="number" min="0" bind:value={edit.maxTotalMB} /></label>
@@ -226,9 +269,27 @@
         <div class="opts">
           <Switch bind:checked={edit.archiveBeforeTruncate} label="Keep a gzip archive before truncating the active file" />
           <Switch bind:checked={edit.compressRotated} label="Gzip uncompressed rotated files (older than 1h)" />
-          <Switch bind:checked={edit.enabled} label="Enabled — runs automatically every hour" />
         </div>
         <p class="dim small" style="margin:0">0 = no limit. Active files are truncated in place (same inode), so running apps keep logging. Journald uses <code>journalctl --vacuum-*</code>.</p>
+
+        <h4>Schedule</h4>
+        <div class="sched-row">
+          <Segmented bind:value={edit.schedule.mode} label="Schedule type"
+            options={[{ value: 'interval', label: 'Repeat' }, { value: 'daily', label: 'Daily at' }]} />
+          {#if edit.schedule.mode === 'daily'}
+            <input type="time" class="mono" bind:value={edit.schedule.at} aria-label="Time of day" />
+          {:else}
+            <Select bind:value={edit.schedule.everyMin} options={intervalOpts} label="Interval" />
+          {/if}
+        </div>
+        <p class="dim small" style="margin:0">
+          {#if edit.schedule.mode === 'daily'}
+            Once a day at {edit.schedule.at || '—'} node time{#if info?.timezone} (<b>{info.timezone}</b>){/if}.
+          {:else}
+            Counted from when the policy was saved or last ran.
+          {/if}
+          {#if !edit.enabled} Applies once the policy is enabled.{/if}
+        </p>
 
         <div class="row" style="margin-top:6px">
           <button onclick={() => preview(edit)} disabled={!!busy}>{#if busy === 'plan'}<span class="spin"></span>{/if} Preview (dry run)</button>
@@ -290,10 +351,20 @@
 
 <style>
   .editor { display: flex; flex-direction: column; gap: 10px; }
-  .editor h3 { margin: 8px 0 0; }
+  .editor h3 { margin: 8px 0 0; padding-top: 10px; border-top: 1px solid var(--border); }
+  .editor h4 { margin: 6px 0 0; font-size: 12px; font-weight: 620; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .status {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--panel2);
+  }
+  .status.on { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--panel2)); }
+  .status-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .two { grid-template-columns: 1fr 1fr; gap: 10px; }
   .pname { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
-  .opts { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .opts { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin-top: 4px; }
+  .sched-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .sched-row input[type='time'] { width: 120px; }
+  .sched { white-space: nowrap; }
   .small { font-size: 12px; }
   .ph { padding: 12px 14px; border-bottom: 1px solid var(--border); }
   tr.sel td { background: var(--panel2); }

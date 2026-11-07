@@ -13,7 +13,8 @@
 </button>
 
 <style>
-  .sw { display: inline-flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0; color: var(--text); font: inherit; cursor: pointer; box-shadow: none; }
+  .sw { display: inline-flex; align-items: center; justify-content: flex-start; gap: 8px; background: none; border: 0; padding: 0; height: auto; min-height: 20px; color: var(--text); font: inherit; text-align: left; white-space: normal; cursor: pointer; box-shadow: none; align-self: flex-start; }
+  .sw:hover:not(:disabled) { background: none; }
   .sw:disabled { opacity: .5; cursor: default; }
   .track { width: 34px; height: 20px; border-radius: 99px; background: var(--border-strong); position: relative; transition: background .15s; flex: none; }
   .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .35); transition: transform .15s; }

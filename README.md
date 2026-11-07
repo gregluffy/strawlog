@@ -120,8 +120,10 @@ Every action is checked three times before it runs:
 
 If any check fails, the preview tells you which one.
 
-Enabled policies run every `STRAWLOG_RETENTION_INTERVAL` (default 1h) on the node itself. The last
-50 runs are kept and shown in the UI.
+Each policy has its own schedule: repeat every 15m–12h, or once a day at a fixed time (the node's
+local time, so set `TZ` on the container if it shouldn't be UTC). Policies with "Run automatically"
+turned off are manual only. They run when you press ▶ or *Apply all now*. Schedules run on the
+node itself and survive restarts. The last 50 runs are kept and shown in the UI.
 
 > Truncating at a size limit cleans up after the fact. The real fix for Docker is a limit at the source,
 > and the Health page gives you the snippet:
@@ -185,7 +187,7 @@ For each channel, choose the cases (and optionally which nodes) to be notified a
 | `STRAWLOG_ALLOW_WRITE` | `false` | both | allow retention actions on this node |
 | `STRAWLOG_WRITE_PATHS` | `/var/log,/var/lib/docker/containers,/var/lib/docker/volumes` | both | host path prefixes retention may touch |
 | `STRAWLOG_SAMPLE_INTERVAL` | `15m` | both | size history sampling |
-| `STRAWLOG_RETENTION_INTERVAL` | `1h` | both | policy enforcement interval |
+| `STRAWLOG_RETENTION_INTERVAL` | `1h` | both | default repeat interval for policies saved without a schedule |
 | `STRAWLOG_ALLOW_FROM` | (all) | agent | IPs/CIDRs allowed to connect; others are dropped before TLS |
 | `STRAWLOG_LOCAL` | `true` | hub | also show this machine |
 | `STRAWLOG_LOCAL_NAME` | hostname | hub | display name of the local node |

@@ -31,7 +31,7 @@ type Config struct {
 	WritePaths        []string      // host path prefixes retention may touch
 	Journalctl        string        // path to journalctl binary
 	SampleInterval    time.Duration // size history sampling
-	RetentionInterval time.Duration // how often enabled policies are enforced
+	RetentionInterval time.Duration // default interval for policies without an explicit schedule
 	Log               *slog.Logger
 }
 
@@ -55,6 +55,7 @@ type Core struct {
 
 	hist     *history
 	policies *policyStore
+	sched    *runState
 	runsMu   sync.Mutex
 	runs     []api.Plan
 	applyMu  sync.Mutex
@@ -99,6 +100,15 @@ func New(cfg Config) (*Core, error) {
 		return nil, err
 	}
 	c.policies = ps
+	c.sched = loadRunState(filepath.Join(cfg.DataDir, "schedule.json"))
+	// policies saved before per-policy schedules existed get the configured default
+	list := ps.get()
+	for i := range list {
+		if list[i].Schedule.Mode == "" {
+			_ = normalizeSchedule(&list[i].Schedule, cfg.RetentionInterval)
+		}
+	}
+	ps.list = list
 	return c, nil
 }
 
@@ -109,7 +119,7 @@ func (c *Core) Run(ctx context.Context) {
 	}
 	c.sample()
 	st := time.NewTicker(c.cfg.SampleInterval)
-	rt := time.NewTicker(c.cfg.RetentionInterval)
+	rt := time.NewTicker(30 * time.Second) // checks which policies are due
 	defer st.Stop()
 	defer rt.Stop()
 	for {
@@ -121,15 +131,8 @@ func (c *Core) Run(ctx context.Context) {
 			if _, err := c.scan(ctx); err == nil {
 				c.sample()
 			}
-		case <-rt.C:
-			if c.cfg.AllowWrite {
-				p, err := c.apply(ctx, api.PlanReq{}, "schedule")
-				if err != nil {
-					c.log.Warn("scheduled retention", "err", err)
-				} else if len(p.Actions) > 0 {
-					c.log.Info("scheduled retention", "actions", len(p.Actions), "freed", p.FreedBytes)
-				}
-			}
+		case now := <-rt.C:
+			c.runDue(ctx, now)
 		}
 	}
 }
@@ -163,7 +166,7 @@ func (c *Core) Info(ctx context.Context) (api.Info, error) {
 	}
 	info := api.Info{
 		Hostname: h, Version: api.Version, OS: runtime.GOOS, Arch: runtime.GOARCH,
-		HostRoot: c.cfg.HostRoot, AllowWrite: c.cfg.AllowWrite, UptimeSec: int64(time.Since(c.started).Seconds()),
+		HostRoot: c.cfg.HostRoot, Timezone: zoneLabel(), AllowWrite: c.cfg.AllowWrite, UptimeSec: int64(time.Since(c.started).Seconds()),
 		Journal: c.cfg.Journalctl != "" && len(c.journalDirs()) > 0,
 	}
 	if c.cfg.AllowWrite {

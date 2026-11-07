@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // TZ works in slim images without /usr/share/zoneinfo
 
 	"strawlog/internal/agent"
 	"strawlog/internal/api"

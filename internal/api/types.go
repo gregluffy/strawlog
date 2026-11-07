@@ -24,6 +24,7 @@ type Info struct {
 	DockerError  string   `json:"dockerError,omitempty"`
 	Journal      bool     `json:"journal"`
 	HostRoot     string   `json:"hostRoot"`
+	Timezone     string   `json:"timezone"` // node local zone, e.g. "UTC" or "Europe/Athens (+02:00)"
 	AllowWrite   bool     `json:"allowWrite"`
 	WritePaths   []string `json:"writePaths,omitempty"`
 	Disks        []Disk   `json:"disks"`
@@ -133,17 +134,29 @@ type Match struct {
 	PathGlob string   `json:"pathGlob,omitempty"`
 }
 
+// Schedule says when an enabled policy runs on its own.
+type Schedule struct {
+	Mode     string `json:"mode"`               // "interval" or "daily"
+	EveryMin int    `json:"everyMin,omitempty"` // interval: minutes between runs
+	At       string `json:"at,omitempty"`       // daily: "HH:MM", node local time
+}
+
 type Policy struct {
-	ID                    string `json:"id"`
-	Name                  string `json:"name"`
-	Enabled               bool   `json:"enabled"`
-	Match                 Match  `json:"match"`
-	MaxAgeDays            int    `json:"maxAgeDays,omitempty"`
-	MaxRotated            int    `json:"maxRotated,omitempty"`
-	CompressRotated       bool   `json:"compressRotated,omitempty"`
-	MaxActiveMB           int64  `json:"maxActiveMB,omitempty"`
-	ArchiveBeforeTruncate bool   `json:"archiveBeforeTruncate,omitempty"`
-	MaxTotalMB            int64  `json:"maxTotalMB,omitempty"`
+	ID                    string   `json:"id"`
+	Name                  string   `json:"name"`
+	Enabled               bool     `json:"enabled"` // runs automatically on Schedule; otherwise manual only
+	Schedule              Schedule `json:"schedule"`
+	Match                 Match    `json:"match"`
+	MaxAgeDays            int      `json:"maxAgeDays,omitempty"`
+	MaxRotated            int      `json:"maxRotated,omitempty"`
+	CompressRotated       bool     `json:"compressRotated,omitempty"`
+	MaxActiveMB           int64    `json:"maxActiveMB,omitempty"`
+	ArchiveBeforeTruncate bool     `json:"archiveBeforeTruncate,omitempty"`
+	MaxTotalMB            int64    `json:"maxTotalMB,omitempty"`
+
+	// read-only, filled by the node
+	LastRun int64 `json:"lastRun,omitempty"` // unix, last scheduled run
+	NextRun int64 `json:"nextRun,omitempty"` // unix, 0 when disabled or node is read-only
 }
 
 type PlanReq struct {
