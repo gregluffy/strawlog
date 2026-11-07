@@ -120,10 +120,11 @@ Every action is checked three times before it runs:
 
 If any check fails, the preview tells you which one.
 
-Each policy has its own schedule: repeat every 15m–12h, or once a day at a fixed time (the node's
-local time, so set `TZ` on the container if it shouldn't be UTC). Policies with "Run automatically"
-turned off are manual only. They run when you press ▶ or *Apply all now*. Schedules run on the
-node itself and survive restarts. The last 50 runs are kept and shown in the UI.
+Each policy has its own schedule: repeat every 15m–12h, or daily, weekly (pick a weekday) or
+monthly (pick a day; 29–31 fall back to the month's last day) at a fixed time. Times are the node's
+local time, so set `TZ` on the container if it shouldn't be UTC. Disabled policies keep their
+schedule but only run when you press ▶ or *Apply all now*. Schedules run on the node itself and
+survive restarts. The last 50 runs are kept and shown in the UI.
 
 > Truncating at a size limit cleans up after the fact. The real fix for Docker is a limit at the source,
 > and the Health page gives you the snippet:

@@ -14,6 +14,8 @@ import (
 const (
 	ModeInterval = "interval"
 	ModeDaily    = "daily"
+	ModeWeekly   = "weekly"
+	ModeMonthly  = "monthly"
 	minEveryMin  = 5
 )
 
@@ -21,6 +23,11 @@ const (
 func normalizeSchedule(s *api.Schedule, defEvery time.Duration) error {
 	if s.Mode == "" {
 		s.Mode = ModeInterval
+	}
+	if s.Mode != ModeInterval {
+		if _, err := time.Parse("15:04", s.At); err != nil {
+			return fmt.Errorf("schedule: time must be HH:MM (got %q)", s.At)
+		}
 	}
 	switch s.Mode {
 	case ModeInterval:
@@ -30,12 +37,19 @@ func normalizeSchedule(s *api.Schedule, defEvery time.Duration) error {
 		if s.EveryMin < minEveryMin {
 			return fmt.Errorf("schedule: run at most every %d minutes", minEveryMin)
 		}
-		s.At = ""
+		*s = api.Schedule{Mode: ModeInterval, EveryMin: s.EveryMin}
 	case ModeDaily:
-		if _, err := time.Parse("15:04", s.At); err != nil {
-			return fmt.Errorf("schedule: time must be HH:MM (got %q)", s.At)
+		*s = api.Schedule{Mode: ModeDaily, At: s.At}
+	case ModeWeekly:
+		if s.Weekday < 0 || s.Weekday > 6 {
+			return fmt.Errorf("schedule: weekday must be 0-6 (got %d)", s.Weekday)
 		}
-		s.EveryMin = 0
+		*s = api.Schedule{Mode: ModeWeekly, At: s.At, Weekday: s.Weekday}
+	case ModeMonthly:
+		if s.Day < 1 || s.Day > 31 {
+			return fmt.Errorf("schedule: day of month must be 1-31 (got %d)", s.Day)
+		}
+		*s = api.Schedule{Mode: ModeMonthly, At: s.At, Day: s.Day}
 	default:
 		return fmt.Errorf("schedule: unknown mode %q", s.Mode)
 	}
@@ -44,16 +58,38 @@ func normalizeSchedule(s *api.Schedule, defEvery time.Duration) error {
 
 // nextRun is the first scheduled time strictly after last.
 func nextRun(s api.Schedule, last time.Time) time.Time {
-	if s.Mode == ModeDaily {
-		t, _ := time.Parse("15:04", s.At)
-		l := last.In(time.Local)
-		n := time.Date(l.Year(), l.Month(), l.Day(), t.Hour(), t.Minute(), 0, 0, time.Local)
+	if s.Mode == ModeInterval || s.Mode == "" {
+		return last.Add(time.Duration(s.EveryMin) * time.Minute)
+	}
+	t, _ := time.Parse("15:04", s.At)
+	l := last.In(time.Local)
+	at := func(y int, m time.Month, d int) time.Time {
+		return time.Date(y, m, d, t.Hour(), t.Minute(), 0, 0, time.Local)
+	}
+	switch s.Mode {
+	case ModeWeekly:
+		n := at(l.Year(), l.Month(), l.Day()+(s.Weekday-int(l.Weekday())+7)%7)
 		if !n.After(l) {
-			n = time.Date(l.Year(), l.Month(), l.Day()+1, t.Hour(), t.Minute(), 0, 0, time.Local)
+			n = n.AddDate(0, 0, 7)
+		}
+		return n
+	case ModeMonthly:
+		day := func(y int, m time.Month) time.Time {
+			last := time.Date(y, m+1, 0, 0, 0, 0, 0, time.Local).Day()
+			return at(y, m, min(s.Day, last))
+		}
+		n := day(l.Year(), l.Month())
+		if !n.After(l) {
+			n = day(l.Year(), l.Month()+1)
+		}
+		return n
+	default: // daily
+		n := at(l.Year(), l.Month(), l.Day())
+		if !n.After(l) {
+			n = at(l.Year(), l.Month(), l.Day()+1)
 		}
 		return n
 	}
-	return last.Add(time.Duration(s.EveryMin) * time.Minute)
 }
 
 // runState remembers, per policy, the anchor the next run is computed from and when it last ran

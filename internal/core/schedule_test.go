@@ -18,6 +18,12 @@ func TestNextRun(t *testing.T) {
 		{api.Schedule{Mode: ModeDaily, At: "03:00"}, time.Date(2026, 3, 11, 3, 0, 0, 0, time.Local)},
 		{api.Schedule{Mode: ModeDaily, At: "18:45"}, time.Date(2026, 3, 10, 18, 45, 0, 0, time.Local)},
 		{api.Schedule{Mode: ModeDaily, At: "14:20"}, time.Date(2026, 3, 11, 14, 20, 0, 0, time.Local)},
+		// 2026-03-10 is a Tuesday
+		{api.Schedule{Mode: ModeWeekly, Weekday: 0, At: "04:00"}, time.Date(2026, 3, 15, 4, 0, 0, 0, time.Local)},
+		{api.Schedule{Mode: ModeWeekly, Weekday: 2, At: "18:00"}, time.Date(2026, 3, 10, 18, 0, 0, 0, time.Local)},
+		{api.Schedule{Mode: ModeWeekly, Weekday: 2, At: "09:00"}, time.Date(2026, 3, 17, 9, 0, 0, 0, time.Local)},
+		{api.Schedule{Mode: ModeMonthly, Day: 1, At: "02:00"}, time.Date(2026, 4, 1, 2, 0, 0, 0, time.Local)},
+		{api.Schedule{Mode: ModeMonthly, Day: 15, At: "02:00"}, time.Date(2026, 3, 15, 2, 0, 0, 0, time.Local)},
 	}
 	for _, c := range cases {
 		if got := nextRun(c.s, base); !got.Equal(c.want) {
@@ -26,12 +32,24 @@ func TestNextRun(t *testing.T) {
 	}
 }
 
+func TestMonthlyClampsToMonthEnd(t *testing.T) {
+	s := api.Schedule{Mode: ModeMonthly, Day: 31, At: "03:00"}
+	got := nextRun(s, time.Date(2026, 1, 31, 4, 0, 0, 0, time.Local))
+	if want := time.Date(2026, 2, 28, 3, 0, 0, 0, time.Local); !got.Equal(want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	got = nextRun(s, got)
+	if want := time.Date(2026, 3, 31, 3, 0, 0, 0, time.Local); !got.Equal(want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
 func TestNormalizeSchedule(t *testing.T) {
 	s := api.Schedule{}
 	if err := normalizeSchedule(&s, time.Hour); err != nil || s.Mode != ModeInterval || s.EveryMin != 60 {
 		t.Fatalf("default: %+v %v", s, err)
 	}
-	for _, bad := range []api.Schedule{{Mode: ModeInterval, EveryMin: 1}, {Mode: ModeDaily, At: "25:00"}, {Mode: "weekly"}} {
+	for _, bad := range []api.Schedule{{Mode: ModeInterval, EveryMin: 1}, {Mode: ModeDaily, At: "25:00"}, {Mode: ModeWeekly, At: "03:00", Weekday: 7}, {Mode: ModeMonthly, At: "03:00"}, {Mode: "yearly", At: "03:00"}} {
 		if err := normalizeSchedule(&bad, time.Hour); err == nil {
 			t.Errorf("%+v: expected error", bad)
 		}

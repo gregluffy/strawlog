@@ -136,9 +136,11 @@ type Match struct {
 
 // Schedule says when an enabled policy runs on its own.
 type Schedule struct {
-	Mode     string `json:"mode"`               // "interval" or "daily"
+	Mode     string `json:"mode"`               // "interval", "daily", "weekly" or "monthly"
 	EveryMin int    `json:"everyMin,omitempty"` // interval: minutes between runs
-	At       string `json:"at,omitempty"`       // daily: "HH:MM", node local time
+	At       string `json:"at,omitempty"`       // daily/weekly/monthly: "HH:MM", node local time
+	Weekday  int    `json:"weekday,omitempty"`  // weekly: 0 = Sunday … 6 = Saturday
+	Day      int    `json:"day,omitempty"`      // monthly: 1–31, clamped to the month's last day
 }
 
 type Policy struct {

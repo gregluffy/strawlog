@@ -21,6 +21,17 @@
 
   let apps = $derived([...new Set(sources.map((s) => s.app))].sort())
   const presets = [15, 30, 60, 120, 180, 360, 720]
+  const schedDefaults = { mode: 'interval', everyMin: 60, at: '03:00', weekday: 0, day: 1 }
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  const weekdayOpts = [1, 2, 3, 4, 5, 6, 0].map((d) => ({ value: d, label: weekdays[d] }))
+  const ordinal = (n) => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th')
+  const dayOpts = Array.from({ length: 31 }, (_, i) => ({ value: i + 1, label: ordinal(i + 1), hint: i >= 28 ? 'or last day' : undefined }))
+  const modeOpts = [
+    { value: 'interval', label: 'Repeat' },
+    { value: 'daily', label: 'Daily' },
+    { value: 'weekly', label: 'Weekly' },
+    { value: 'monthly', label: 'Monthly' },
+  ]
   let intervalOpts = $derived(
     [...new Set([...presets, ...(edit?.schedule?.everyMin ? [edit.schedule.everyMin] : [])])]
       .sort((a, b) => a - b)
@@ -49,7 +60,7 @@
   $effect(() => { if (app.node !== lastNode) { lastNode = app.node; edit = null; plan = null; load() } })
 
   function blank() {
-    return { id: '', name: '', enabled: true, schedule: { mode: 'interval', everyMin: 60, at: '03:00' }, match: { apps: [], kinds: [], sources: [], pathGlob: '' }, maxAgeDays: 0, maxRotated: 0, compressRotated: false, maxActiveMB: 0, archiveBeforeTruncate: true, maxTotalMB: 0 }
+    return { id: '', name: '', enabled: true, schedule: { ...schedDefaults }, match: { apps: [], kinds: [], sources: [], pathGlob: '' }, maxAgeDays: 0, maxRotated: 0, compressRotated: false, maxActiveMB: 0, archiveBeforeTruncate: true, maxTotalMB: 0 }
   }
   function newPolicy(s) {
     const p = blank()
@@ -66,9 +77,8 @@
   function editPolicy(i) {
     edit = JSON.parse(JSON.stringify(policies[i]))
     edit.match = { apps: [], kinds: [], sources: [], pathGlob: '', ...edit.match }
-    edit.schedule = { mode: 'interval', everyMin: 60, at: '03:00', ...edit.schedule }
-    if (!edit.schedule.everyMin) edit.schedule.everyMin = 60
-    if (!edit.schedule.at) edit.schedule.at = '03:00'
+    edit.schedule = { ...schedDefaults, ...edit.schedule }
+    for (const k of ['everyMin', 'at', 'day']) if (!edit.schedule[k]) edit.schedule[k] = schedDefaults[k]
     editIdx = i
     plan = null
   }
@@ -78,7 +88,12 @@
     delete c.lastRun
     delete c.nextRun
     const sc = c.schedule || {}
-    c.schedule = sc.mode === 'daily' ? { mode: 'daily', at: sc.at || '03:00' } : { mode: 'interval', everyMin: Number(sc.everyMin) || 60 }
+    const at = sc.at || '03:00'
+    c.schedule =
+      sc.mode === 'daily' ? { mode: 'daily', at }
+      : sc.mode === 'weekly' ? { mode: 'weekly', at, weekday: Number(sc.weekday) || 0 }
+      : sc.mode === 'monthly' ? { mode: 'monthly', at, day: Number(sc.day) || 1 }
+      : { mode: 'interval', everyMin: Number(sc.everyMin) || 60 }
     return c
   }
 
@@ -130,7 +145,12 @@
 
   function schedText(sc) {
     if (!sc) return ''
-    return sc.mode === 'daily' ? `daily at ${sc.at}` : every(Number(sc.everyMin) || 60)
+    switch (sc.mode) {
+      case 'daily': return `daily at ${sc.at}`
+      case 'weekly': return `weekly on ${weekdays[sc.weekday || 0]} at ${sc.at}`
+      case 'monthly': return `monthly on the ${ordinal(sc.day || 1)} at ${sc.at}`
+      default: return every(Number(sc.everyMin) || 60)
+    }
   }
   function toggleIn(arr, v) { return arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v] }
   function describe(p) {
@@ -274,22 +294,36 @@
 
         <h4>Schedule</h4>
         <div class="sched-row">
-          <Segmented bind:value={edit.schedule.mode} label="Schedule type"
-            options={[{ value: 'interval', label: 'Repeat' }, { value: 'daily', label: 'Daily at' }]} />
-          {#if edit.schedule.mode === 'daily'}
-            <input type="time" class="mono" bind:value={edit.schedule.at} aria-label="Time of day" />
-          {:else}
+          <Segmented bind:value={edit.schedule.mode} label="Schedule type" options={modeOpts} />
+        </div>
+        <div class="sched-row">
+          {#if edit.schedule.mode === 'interval'}
+            <span class="muted">Every</span>
             <Select bind:value={edit.schedule.everyMin} options={intervalOpts} label="Interval" />
+          {:else}
+            {#if edit.schedule.mode === 'weekly'}
+              <span class="muted">On</span>
+              <Select bind:value={edit.schedule.weekday} options={weekdayOpts} label="Weekday" />
+            {:else if edit.schedule.mode === 'monthly'}
+              <span class="muted">On the</span>
+              <Select bind:value={edit.schedule.day} options={dayOpts} label="Day of month" menuWidth={180} />
+            {/if}
+            <span class="muted">at</span>
+            <input type="time" class="mono" bind:value={edit.schedule.at} aria-label="Time of day" />
+            {#if info?.timezone}<span class="dim small">node time · {info.timezone}</span>{/if}
           {/if}
         </div>
         <p class="dim small" style="margin:0">
-          {#if edit.schedule.mode === 'daily'}
-            Once a day at {edit.schedule.at || '—'} node time{#if info?.timezone} (<b>{info.timezone}</b>){/if}.
-          {:else}
+          {#if edit.schedule.mode === 'interval'}
             Counted from when the policy was saved or last ran.
+          {:else if edit.schedule.mode === 'monthly' && edit.schedule.day > 28}
+            In shorter months it runs on the last day instead.
           {/if}
           {#if !edit.enabled} Applies once the policy is enabled.{/if}
         </p>
+        {#if (edit.schedule.mode === 'weekly' || edit.schedule.mode === 'monthly') && (Number(edit.maxActiveMB) || Number(edit.maxTotalMB))}
+          <div class="alert warn small">Size limits are only enforced when the policy runs. Logs can grow past {Number(edit.maxActiveMB) ? `${edit.maxActiveMB} MB` : `${edit.maxTotalMB} MB`} for up to a {edit.schedule.mode === 'weekly' ? 'week' : 'month'} between runs.</div>
+        {/if}
 
         <div class="row" style="margin-top:6px">
           <button onclick={() => preview(edit)} disabled={!!busy}>{#if busy === 'plan'}<span class="spin"></span>{/if} Preview (dry run)</button>
