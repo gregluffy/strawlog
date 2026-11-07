@@ -20,9 +20,10 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 
 # ---- runtime ----
 # Debian slim only because journalctl is needed to read binary journald files.
+# ca-certificates: outbound HTTPS (Discord/Teams/webhook notifications).
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends systemd \
+ && apt-get install -y --no-install-recommends systemd ca-certificates \
  && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /usr/share/locale \
             /lib/systemd/system /etc/systemd/system /usr/lib/systemd/user \
  && mkdir -p /data && chmod 700 /data
