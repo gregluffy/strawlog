@@ -285,6 +285,7 @@ func (s *Server) Handler() http.Handler {
 		jsonOut(w, 200, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /api/password", s.guard(RoleViewer, s.handlePassword))
+	mux.HandleFunc("PATCH /api/me/prefs", s.guard(RoleViewer, s.handlePrefs))
 
 	// --- users (admin) ---
 	mux.HandleFunc("GET /api/users", s.guard(RoleAdmin, s.handleListUsers))
@@ -555,6 +556,38 @@ func (s *Server) handlePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sess.revokeUser(me.ID, keep) // sign out other devices
 	jsonOut(w, 200, map[string]bool{"ok": true})
+}
+
+// handlePrefs merges the given UI preferences into the current user's record.
+func (s *Server) handlePrefs(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		LogsPickerWidth *int `json:"logsPickerWidth"`
+	}
+	if err := readBody(r, &req); err != nil {
+		jsonErr(w, 400, err)
+		return
+	}
+	if v := req.LogsPickerWidth; v != nil && *v != 0 && (*v < minPickerWidth || *v > maxPickerWidth) {
+		jsonErr(w, 400, fmt.Errorf("logsPickerWidth must be between %d and %d", minPickerWidth, maxPickerWidth))
+		return
+	}
+	me := userFrom(r)
+	var out Prefs
+	if err := s.store.update(func(st *hubState) error {
+		_, i := st.userByName(me.Username)
+		if i < 0 {
+			return errors.New("user vanished")
+		}
+		if req.LogsPickerWidth != nil {
+			st.Users[i].Prefs.LogsPickerWidth = *req.LogsPickerWidth
+		}
+		out = st.Users[i].Prefs
+		return nil
+	}); err != nil {
+		jsonErr(w, 500, err)
+		return
+	}
+	jsonOut(w, 200, out)
 }
 
 // ---------- nodes ----------

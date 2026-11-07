@@ -24,6 +24,10 @@
   let pickQ = $state('')
   let loading = $state(false)
   let error = $state('')
+  const PW_DEF = 260, PW_MIN = 180, PW_MAX = 640
+  const clampW = (w) => Math.round(Math.min(PW_MAX, Math.max(PW_MIN, w)))
+  let pickerW = $state(clampW(app.user?.prefs?.logsPickerWidth || PW_DEF))
+  let resizing = $state(false)
   let box
   let stick = true
   let es = null
@@ -126,6 +130,48 @@
   $effect(() => { if (app.node !== lastNode) { lastNode = app.node; stop(); sourceId = ''; lines = []; loadSources() } })
   $effect(() => save('strawlog.wrap', wrap ? '1' : '0'))
 
+  // ---- resizable source picker (width saved per user on the hub) ----
+  let saveT = 0
+  function persistWidth() {
+    clearTimeout(saveT)
+    const w = pickerW
+    saveT = setTimeout(async () => {
+      if (app.user?.prefs?.logsPickerWidth === w) return
+      try {
+        const prefs = await api.patch('/api/me/prefs', { logsPickerWidth: w === PW_DEF ? 0 : w })
+        if (app.user) app.user.prefs = prefs
+      } catch (e) { toast('Could not save panel width: ' + e.message, 'err') }
+    }, 300)
+  }
+  function startResize(e) {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const x0 = e.clientX, w0 = pickerW
+    resizing = true
+    const move = (ev) => (pickerW = clampW(w0 + ev.clientX - x0))
+    const up = () => {
+      resizing = false
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      persistWidth()
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }
+  function resizeKey(e) {
+    const step = e.shiftKey ? 40 : 10
+    if (e.key === 'ArrowLeft') pickerW = clampW(pickerW - step)
+    else if (e.key === 'ArrowRight') pickerW = clampW(pickerW + step)
+    else if (e.key === 'Home') pickerW = PW_MIN
+    else if (e.key === 'End') pickerW = PW_MAX
+    else return
+    e.preventDefault()
+    persistWidth()
+  }
+  function resetWidth() { pickerW = PW_DEF; persistWidth() }
+
   function dl() {
     const qs = new URLSearchParams({ source: sourceId, unit })
     location.href = api.n(app.node, '/download?' + qs)
@@ -138,7 +184,7 @@
   }
 </script>
 
-<div class="logs">
+<div class="logs" class:resizing style="--pw:{pickerW}px">
   <div class="picker">
     <div class="fbox pickq"><Icon name="search" size={14} /><input placeholder="Find source…" bind:value={pickQ} /></div>
     <div class="plist">
@@ -153,6 +199,11 @@
         {/each}
       {/each}
     </div>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div class="resizer" role="separator" aria-orientation="vertical" aria-label="Resize source list"
+      aria-valuenow={pickerW} aria-valuemin={PW_MIN} aria-valuemax={PW_MAX} tabindex="0"
+      title="Drag to resize · double-click to reset"
+      onpointerdown={startResize} ondblclick={resetWidth} onkeydown={resizeKey}></div>
   </div>
 
   <div class="viewer">
@@ -207,8 +258,12 @@
 </div>
 
 <style>
-  .logs { display: grid; grid-template-columns: 260px 1fr; height: 100vh; }
-  .picker { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+  .logs { display: grid; grid-template-columns: var(--pw, 260px) 1fr; height: 100vh; }
+  .logs.resizing { cursor: col-resize; user-select: none; }
+  .picker { position: relative; border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); }
+  .resizer { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; cursor: col-resize; z-index: 5; touch-action: none; outline: none; }
+  .resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .12s; }
+  .resizer:hover::after, .resizer:focus-visible::after, .logs.resizing .resizer::after { background: var(--accent); }
   .pickq { margin: 12px; }
   .fbox { position: relative; display: flex; align-items: center; min-width: 140px; }
   .fbox :global(.icon) { position: absolute; left: 10px; color: var(--dim); pointer-events: none; }
@@ -240,5 +295,5 @@
   .logbox { flex: 1; min-height: 0; padding: 6px 0; }
   .status { display: flex; gap: 12px; font-size: 11.5px; padding: 5px 12px; border-top: 1px solid var(--border); }
   .status .right { max-width: 50%; }
-  @media (max-width: 860px) { .logs { grid-template-columns: 1fr; grid-template-rows: 180px 1fr; } .picker { border-right: 0; border-bottom: 1px solid var(--border); } }
+  @media (max-width: 860px) { .logs { grid-template-columns: 1fr; grid-template-rows: 180px 1fr; } .picker { border-right: 0; border-bottom: 1px solid var(--border); } .resizer { display: none; } }
 </style>

@@ -61,7 +61,18 @@ type User struct {
 	Disabled     bool   `json:"disabled,omitempty"`
 	CreatedAt    int64  `json:"createdAt"`
 	LastLogin    int64  `json:"lastLogin,omitempty"`
+	Prefs        Prefs  `json:"prefs"`
 }
+
+// Prefs are per-user UI preferences, persisted with the user so they follow them across browsers.
+type Prefs struct {
+	LogsPickerWidth int `json:"logsPickerWidth,omitempty"` // px; 0 = default
+}
+
+const (
+	minPickerWidth = 180
+	maxPickerWidth = 640
+)
 
 // public returns the user without secrets.
 func (u User) public() User { u.PasswordHash = ""; return u }
