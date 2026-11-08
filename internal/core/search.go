@@ -148,7 +148,9 @@ func (c *Core) Search(ctx context.Context, r api.SearchReq) (api.SearchResult, e
 			}
 		}
 	}
+	skipped := 0
 	if len(targets) > maxSearchSources {
+		skipped = len(targets) - maxSearchSources
 		targets = targets[:maxSearchSources]
 	}
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -203,6 +205,10 @@ func (c *Core) Search(ctx context.Context, r api.SearchReq) (api.SearchResult, e
 	if res.Matches > int64(len(res.Lines)) {
 		res.Truncated = true
 	}
+	if skipped > 0 {
+		res.Truncated = true
+		res.Errors = append(res.Errors, fmt.Sprintf("%d sources were not searched (limit is %d per node); narrow the search by app or source", skipped, maxSearchSources))
+	}
 	if ctx.Err() == context.DeadlineExceeded {
 		res.Errors = append(res.Errors, "search timed out after 60s; results are partial")
 	}
@@ -221,13 +227,27 @@ func filesOf(s api.Source, rotated bool) []string {
 	return files
 }
 
+// staleFile reports whether a file was last written before the "since" cutoff,
+// in which case it cannot contain any line from the requested time range.
+func (c *Core) staleFile(p string, since time.Time) bool {
+	if since.IsZero() {
+		return false
+	}
+	fi, err := os.Stat(c.hp(p))
+	return err == nil && fi.ModTime().Before(since)
+}
+
 // searchFiles scans oldest → newest so the ring keeps the newest matches.
 func (c *Core) searchFiles(ctx context.Context, s api.Source, r api.SearchReq, m *matcher, res *api.SearchResult, scanned *atomic.Int64) error {
 	files := filesOf(s, r.IncludeRotated)
+	since, _ := parseSince(r.Since)
 	rg := &ring{n: r.Limit}
 	var scratch []byte
 	for i := len(files) - 1; i >= 0; i-- {
 		p := files[i]
+		if c.staleFile(p, since) {
+			continue
+		}
 		f, err := os.Open(c.hp(p))
 		if err != nil {
 			continue
@@ -277,6 +297,9 @@ func (c *Core) searchDocker(ctx context.Context, s api.Source, r api.SearchReq, 
 		if _, err := os.Stat(c.hp(s.Path)); err == nil {
 			files := filesOf(s, r.IncludeRotated)
 			for i := len(files) - 1; i >= 0; i-- {
+				if hasSince && c.staleFile(files[i], since) {
+					continue
+				}
 				f, err := os.Open(c.hp(files[i]))
 				if err != nil {
 					continue

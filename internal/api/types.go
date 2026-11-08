@@ -93,7 +93,7 @@ type SearchReq struct {
 	IncludeRotated bool     `json:"includeRotated"`
 	Levels         []string `json:"levels,omitempty"`
 	Unit           string   `json:"unit,omitempty"`
-	Since          string   `json:"since,omitempty"` // journal/docker only, e.g. "2h" or RFC3339
+	Since          string   `json:"since,omitempty"` // e.g. "2h" or RFC3339; exact for journal/docker, plain files are skipped when not written since
 	Limit          int      `json:"limit"`
 }
 

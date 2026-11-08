@@ -115,7 +115,7 @@
         {/each}
       {/if}
     </div>
-    <p class="dim small hint">“since” filters Docker and journald by timestamp; plain files have no reliable timestamps, so they are always scanned in full.</p>
+    <p class="dim small hint">“since” filters Docker and journald by timestamp. Plain files have no reliable timestamps: files not written to since then are skipped, the rest are scanned in full.</p>
   </form>
 
   {#if error}<div class="alert err" style="margin-top:12px">{error}</div>{/if}

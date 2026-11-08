@@ -1,8 +1,10 @@
 package core
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,5 +155,32 @@ func TestSearchRing(t *testing.T) {
 	}
 	if got != "hij" || r.total != 10 {
 		t.Fatalf("ring = %q total %d", got, r.total)
+	}
+}
+
+func TestSearchFilesSkipsStaleFiles(t *testing.T) {
+	dir := t.TempDir()
+	cur, old := filepath.Join(dir, "app.log"), filepath.Join(dir, "app.log.1")
+	os.WriteFile(cur, []byte("hit new\n"), 0o644)
+	os.WriteFile(old, []byte("hit old\n"), 0o644)
+	past := time.Now().Add(-48 * time.Hour)
+	os.Chtimes(old, past, past)
+	c := &Core{}
+	s := api.Source{ID: "x", Path: cur, Rotated: []api.FileInfo{{Path: old}}}
+	run := func(since string) []api.Line {
+		r := api.SearchReq{Query: "hit", IncludeRotated: true, Since: since, Limit: 10}
+		m, _ := newMatcher(r)
+		var res api.SearchResult
+		var n atomic.Int64
+		if err := c.searchFiles(context.Background(), s, r, m, &res, &n); err != nil {
+			t.Fatal(err)
+		}
+		return res.Lines
+	}
+	if got := run(""); len(got) != 2 {
+		t.Fatalf("no since: got %d lines, want 2", len(got))
+	}
+	if got := run("24h"); len(got) != 1 || got[0].Text != "hit new" {
+		t.Fatalf("since 24h: got %v, want only the fresh file", got)
 	}
 }
