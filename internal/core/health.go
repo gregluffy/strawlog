@@ -44,7 +44,7 @@ func (c *Core) Health(ctx context.Context) ([]api.Finding, error) {
 	add := func(sev, code string, s *api.Source, title, detail, fix string) {
 		f := api.Finding{Severity: sev, Code: code, Title: title, Detail: detail, Fix: fix, Key: code}
 		if s != nil {
-			f.SourceID, f.App = s.ID, s.App
+			f.SourceID, f.App, f.Name = s.ID, s.App, s.Name
 			f.Key = code + "|" + s.ID
 		}
 		out = append(out, f)
@@ -163,7 +163,7 @@ func (c *Core) noisyFindings(ctx context.Context, srcs []api.Source) []api.Findi
 			}
 		}
 		if dbg*100/len(lines) >= 40 {
-			out = append(out, api.Finding{Key: "debug-logging|" + cd.s.ID, Severity: "warning", Code: "debug-logging", SourceID: cd.s.ID, App: cd.s.App,
+			out = append(out, api.Finding{Key: "debug-logging|" + cd.s.ID, Severity: "warning", Code: "debug-logging", SourceID: cd.s.ID, App: cd.s.App, Name: cd.s.Name,
 				Title:  fmt.Sprintf("%s logs mostly DEBUG/TRACE (%d%% of recent lines)", cd.s.Name, dbg*100/len(lines)),
 				Detail: "Verbose logging in production costs disk and I/O and can slow the app down.",
 				Fix:    "Lower the log level (e.g. LOG_LEVEL=info / RUST_LOG=info / ASPNETCORE_LOGGING__LOGLEVEL__DEFAULT=Information)."})

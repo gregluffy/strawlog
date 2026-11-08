@@ -19,6 +19,11 @@
   $effect(() => { if (app.node !== lastNode) { lastNode = app.node; load() } })
 
   let shown = $derived((findings || []).filter((f) => !sev || f.severity === sev))
+  // split the title around the source name so it can be highlighted
+  function parts(f) {
+    const i = f.name ? f.title.indexOf(f.name) : -1
+    return i < 0 ? [f.title, '', ''] : [f.title.slice(0, i), f.name, f.title.slice(i + f.name.length)]
+  }
   let counts = $derived((findings || []).reduce((a, f) => ((a[f.severity] = (a[f.severity] || 0) + 1), a), {}))
 </script>
 
@@ -38,10 +43,11 @@
   {:else}
     <div class="list">
       {#each shown as f, i}
+        {@const [pre, nm, post] = parts(f)}
         <div class="card f {f.severity}">
           <div class="row">
             <span class="sicon {f.severity}"><Icon name={f.severity === 'info' ? 'info' : 'alert'} size={16} /></span>
-            <b class="grow">{f.title}</b>
+            <b class="grow">{pre}{#if nm}<span class="nm">{nm}</span>{/if}{post}</b>
             {#if f.sourceId}
               <button class="sm" onclick={() => go('/logs', { source: f.sourceId })}><Icon name="logs" size={13} /> Logs</button>
               <button class="sm" onclick={() => go('/policies', { source: f.sourceId })}><Icon name="retention" size={13} /> Policy</button>
@@ -62,6 +68,7 @@
   .sicon { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; flex: none; color: var(--info); background: color-mix(in srgb, var(--info) 14%, transparent); }
   .sicon.critical { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
   .sicon.warning { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+  .nm { color: var(--accent); font-family: var(--mono); font-size: 0.95em; padding: 1px 6px; border-radius: var(--r-xs); background: var(--accent-soft); }
   .d { margin: 6px 0 0 38px; font-size: 13px; }
   .f pre { margin-left: 38px; }
 </style>

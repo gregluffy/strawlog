@@ -112,6 +112,7 @@ type Finding struct {
 	Code     string `json:"code"`
 	SourceID string `json:"sourceId,omitempty"`
 	App      string `json:"app,omitempty"`
+	Name     string `json:"name,omitempty"` // source name, highlighted in the title by the UI
 	Title    string `json:"title"`
 	Detail   string `json:"detail"`
 	Fix      string `json:"fix,omitempty"`
