@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -47,6 +48,9 @@ type Config struct {
 	TLS            string // "off", "auto", or "cert.pem:key.pem"
 	PublicURL      string // optional dashboard URL used in notifications
 	NotifyInterval time.Duration
+	// TrustedProxies are reverse proxies whose X-Forwarded-For header is believed when resolving
+	// the client IP (login rate limiting, audit log). Empty means only the TCP peer address counts.
+	TrustedProxies []netip.Prefix
 	Log            *slog.Logger
 }
 
@@ -251,7 +255,7 @@ func (s *Server) guard(min Role, h http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if r.Method != http.MethodGet && min.rank() >= RoleOperator.rank() {
-			s.log.Info("audit", "user", u.Username, "method", r.Method, "path", r.URL.Path, "ip", clientIP(r))
+			s.log.Info("audit", "user", u.Username, "method", r.Method, "path", r.URL.Path, "ip", s.clientIP(r))
 		}
 		h(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, u)))
 	}
@@ -453,7 +457,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
-	if !s.loginLim.allow("setup:" + clientIP(r)) {
+	if !s.loginLim.allow("setup:" + s.clientIP(r)) {
 		jsonErr(w, 429, errors.New("too many attempts"))
 		return
 	}
@@ -513,7 +517,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if req.Username == "" {
 		req.Username = "admin"
 	}
-	ip := clientIP(r)
+	ip := s.clientIP(r)
 	if !s.loginLim.allow(ip) || !s.userLim.allow(strings.ToLower(req.Username)) {
 		jsonErr(w, 429, errors.New("too many login attempts, try again in a few minutes"))
 		return

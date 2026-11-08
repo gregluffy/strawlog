@@ -94,8 +94,41 @@ Match User strawlog
 
 - Run the agent in each VM or LXC that runs Docker (Docker-in-LXC works the same way).
 - Set `STRAWLOG_ALLOW_FROM=192.168.1.0/24`, or better, just the hub's IP.
-- To reach the hub from other LAN devices, publish `8080:8080` and set `STRAWLOG_TLS=auto` (a self-signed HTTPS certificate is created), or put it behind your reverse proxy and set `STRAWLOG_SECURE_COOKIES=true`.
+- To reach the hub from other LAN devices, publish `8080:8080` and set `STRAWLOG_TLS=auto` (a self-signed HTTPS certificate is created), or use your own certificate or reverse proxy (see [HTTPS with your own certificate](#https-with-your-own-certificate)).
 - For agents on the internet, put them behind WireGuard or Tailscale if you can, and bind the agent port to that interface: `"100.x.y.z:7443:7443"`.
+
+### HTTPS with your own certificate
+
+If you have your own CA (for example Active Directory Certificate Services, whose root your
+domain-joined machines already trust), there are two ways to serve the dashboard with it. Both have a
+ready-to-use example:
+
+| | [`deploy/hub-own-cert`](deploy/hub-own-cert) | [`deploy/hub-nginx`](deploy/hub-nginx) |
+|---|---|---|
+| Who serves HTTPS | the hub itself | nginx, in front of the hub |
+| Settings | `STRAWLOG_TLS=/certs/strawlog.crt:/certs/strawlog.key` | `STRAWLOG_SECURE_COOKIES=true`, `STRAWLOG_TRUSTED_PROXIES=<nginx IP>` |
+| Use when | you just want HTTPS | you already run nginx, or want port 443 shared with other sites |
+
+**Certificate files** (both options): PEM, server certificate first and then any intermediates in the
+`.crt`, and an unencrypted key. The certificate needs a SAN for the hostname people type. Each example's
+`certs/README.md` shows how to convert an AD CS `.pfx` export or request one with a CSR. The hub reads
+its certificate at startup, so restart it after renewing.
+
+**Behind a reverse proxy**, three things matter:
+
+- **Forward the original `Host` header** (`proxy_set_header Host $http_host;`). For CSRF protection the
+  hub rejects state-changing requests whose `Origin` doesn't match `Host`. Without this line, login and
+  every save fail with "cross-origin request rejected".
+- **Turn off buffering** for live tail (server-sent events): `proxy_buffering off;` and a long
+  `proxy_read_timeout`.
+- **Tell the hub which proxy to trust** with `STRAWLOG_TRUSTED_PROXIES`, so login rate limiting and the
+  audit log see the real client IP from `X-Forwarded-For` rather than the proxy's. Only list the proxy's
+  own address. The header is read right to left and stops at the first untrusted hop, so clients can't
+  forge their address, but only if nothing else that can reach the hub is on the trusted list. Inside
+  Docker, connections that arrive through a published port can come from the network's gateway (`.1`),
+  so trust nginx's fixed address, not the whole subnet.
+
+Any other proxy (Traefik, Caddy, HAProxy, IIS ARR) works the same way with these three points.
 
 ## What it can see (mounts)
 
@@ -225,6 +258,7 @@ For each channel, choose the cases (and optionally which nodes) to be notified a
 | `STRAWLOG_NOTIFY_INTERVAL` | `5m` | hub | how often the hub checks nodes for notification events |
 | `STRAWLOG_TLS` | `off` | hub | `auto` (self-signed) or `/path/cert.pem:/path/key.pem` |
 | `STRAWLOG_SECURE_COOKIES` | `false` | hub | set when a TLS reverse proxy is in front |
+| `STRAWLOG_TRUSTED_PROXIES` | | hub | reverse proxy IPs/CIDRs whose `X-Forwarded-For` is believed for the client IP (rate limiting, audit log) |
 | `STRAWLOG_DEBUG` | `false` | both | debug logging |
 
 ## CLI

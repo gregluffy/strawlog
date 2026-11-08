@@ -182,6 +182,11 @@ func runHub(ctx context.Context, dataDir string, log *slog.Logger) error {
 		LocalName:      env("STRAWLOG_LOCAL_NAME", ""),
 		Log:            log,
 	}
+	proxies, err := envPrefixes("STRAWLOG_TRUSTED_PROXIES")
+	if err != nil {
+		return err
+	}
+	cfg.TrustedProxies = proxies
 	if envBool("STRAWLOG_LOCAL", true) {
 		c, err := core.New(coreConfig(filepath.Join(dataDir, "local"), log))
 		if err != nil {
@@ -205,18 +210,9 @@ func runAgent(ctx context.Context, dataDir string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	var allow []netip.Prefix
-	for _, p := range envList("STRAWLOG_ALLOW_FROM") {
-		if !strings.Contains(p, "/") {
-			if a, err := netip.ParseAddr(p); err == nil {
-				p = fmt.Sprintf("%s/%d", p, a.BitLen())
-			}
-		}
-		pr, err := netip.ParsePrefix(p)
-		if err != nil {
-			return fmt.Errorf("STRAWLOG_ALLOW_FROM: %w", err)
-		}
-		allow = append(allow, pr.Masked())
+	allow, err := envPrefixes("STRAWLOG_ALLOW_FROM")
+	if err != nil {
+		return err
 	}
 	srv, err := agent.New(agent.Config{Listen: env("STRAWLOG_LISTEN", ":7443"), DataDir: dataDir, AllowFrom: allow, Node: c, Log: log})
 	if err != nil {
@@ -261,4 +257,22 @@ func healthcheck() error {
 		return err
 	}
 	return c.Close()
+}
+
+// envPrefixes parses a comma-separated list of IPs and CIDRs; a bare IP becomes a single-host prefix.
+func envPrefixes(name string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, p := range envList(name) {
+		if !strings.Contains(p, "/") {
+			if a, err := netip.ParseAddr(p); err == nil {
+				p = fmt.Sprintf("%s/%d", p, a.BitLen())
+			}
+		}
+		pr, err := netip.ParsePrefix(p)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		out = append(out, pr.Masked())
+	}
+	return out, nil
 }

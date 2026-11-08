@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -417,10 +418,49 @@ func (l *limiter) allow(key string) bool {
 	return true
 }
 
-func clientIP(r *http.Request) string {
+// clientIP returns the address used for rate limiting and audit logging. X-Forwarded-For is only
+// believed when the TCP peer is a trusted proxy; the header is then read right to left, skipping
+// further trusted proxies, so a client cannot spoof its address by sending its own header.
+func (s *Server) clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
 	}
-	return host
+	if len(s.cfg.TrustedProxies) == 0 || !s.trustedProxy(host) {
+		return host
+	}
+	var hops []string
+	for _, h := range r.Header.Values("X-Forwarded-For") {
+		for _, part := range strings.Split(h, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				hops = append(hops, part)
+			}
+		}
+	}
+	ip := host
+	for i := len(hops) - 1; i >= 0; i-- {
+		a, err := netip.ParseAddr(hops[i])
+		if err != nil {
+			return ip // malformed hop: stop at the last address a trusted proxy vouched for
+		}
+		ip = a.Unmap().String()
+		if !s.trustedProxy(ip) {
+			return ip
+		}
+	}
+	return ip // every hop is a trusted proxy: the left-most one is the client
+}
+
+func (s *Server) trustedProxy(ip string) bool {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	for _, p := range s.cfg.TrustedProxies {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }

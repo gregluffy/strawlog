@@ -1,0 +1,62 @@
+# Straw Log — dashboard behind nginx, which terminates HTTPS with a certificate from your own CA.
+# The hub is not published on the host at all: only nginx can reach it.
+#
+#   1. Put the certificate and key in ./certs (see ./certs/README.md), set server_name in nginx.conf
+#   2. docker compose up -d && docker compose logs strawlog | grep -A1 SETUP
+#   3. open https://logs.corp.example
+#
+# Already run nginx on the host? Skip the nginx service, publish the hub as "127.0.0.1:8080:8080",
+# use proxy_pass http://127.0.0.1:8080 and set STRAWLOG_TRUSTED_PROXIES=172.30.80.1 (Docker's
+# port forwarding makes host connections arrive from the network gateway, not 127.0.0.1).
+# Want this machine's own logs too? Copy the mounts, cap_add and docker-proxy from ../standalone.
+
+name: strawlog-hub
+
+services:
+  strawlog:
+    image: ${STRAWLOG_IMAGE:-strawlog:latest}
+    build: ../..
+    container_name: strawlog
+    command: ["hub"]
+    restart: unless-stopped
+    environment:
+      STRAWLOG_LOCAL: "false"
+      STRAWLOG_SECURE_COOKIES: "true"           # nginx serves HTTPS, so cookies must be Secure
+      # Believe X-Forwarded-For only from nginx's fixed address (real client IP for login rate
+      # limiting and the audit log). Name just nginx, never the whole subnet: the gateway .1 is in it.
+      STRAWLOG_TRUSTED_PROXIES: 172.30.80.10
+      STRAWLOG_PUBLIC_URL: https://logs.corp.example
+      # STRAWLOG_ADMIN_PASSWORD: ...           # optional first admin
+    volumes:
+      - strawlog-data:/data
+    read_only: true
+    tmpfs: ["/tmp:size=8m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    pids_limit: 64
+    mem_limit: 128m
+    networks: [web]
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: strawlog-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on: [strawlog]
+    networks:
+      web:
+        ipv4_address: 172.30.80.10
+
+networks:
+  web:
+    ipam:
+      config:
+        - subnet: 172.30.80.0/24   # fixed, so nginx gets a known address; change all three if it clashes
+
+volumes:
+  strawlog-data:

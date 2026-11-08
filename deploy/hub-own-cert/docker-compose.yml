@@ -1,0 +1,40 @@
+# Straw Log — dashboard serving HTTPS itself with a certificate from your own CA
+# (e.g. Active Directory Certificate Services). No reverse proxy needed.
+#
+#   1. Put the certificate and key in ./certs (see ./certs/README.md for converting a .pfx):
+#        ./certs/strawlog.crt   server cert first, then any intermediate CA certs (PEM)
+#        ./certs/strawlog.key   private key, unencrypted PEM, readable by root (uid 0)
+#   2. docker compose up -d && docker compose logs strawlog | grep -A1 SETUP
+#   3. open https://logs.corp.example:8443
+#
+# The certificate is read at startup: restart the container after renewing it.
+# Want this machine's own logs too? Copy the mounts, cap_add and docker-proxy from ../standalone.
+
+name: strawlog-hub
+
+services:
+  strawlog:
+    image: ${STRAWLOG_IMAGE:-strawlog:latest}
+    build: ../..
+    container_name: strawlog
+    command: ["hub"]
+    restart: unless-stopped
+    ports:
+      - "8443:8080"              # or "443:8080"; reachable from the LAN, so TLS is on
+    environment:
+      STRAWLOG_LOCAL: "false"
+      STRAWLOG_TLS: /certs/strawlog.crt:/certs/strawlog.key
+      STRAWLOG_PUBLIC_URL: https://logs.corp.example:8443
+      # STRAWLOG_ADMIN_PASSWORD: ...           # optional first admin
+    volumes:
+      - strawlog-data:/data
+      - ./certs:/certs:ro
+    read_only: true
+    tmpfs: ["/tmp:size=8m"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    pids_limit: 64
+    mem_limit: 128m
+
+volumes:
+  strawlog-data:
