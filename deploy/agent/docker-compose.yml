@@ -1,13 +1,26 @@
 # Straw Log agent — run on every server / VM you want to see in the dashboard.
 #
-#   1. set STRAWLOG_ALLOW_FROM below to your hub's IP (or LAN / VPN range)
-#   2. docker compose up -d
-#   3. docker compose logs strawlog-agent | grep -A1 "PAIRING CODE"
-#      (new code any time: docker compose exec strawlog-agent strawlog agent pair)
-#   4. dashboard → Nodes → Add agent → <this-host>:7443 + code
+# First pick how the hub will reach this agent (see "ports:" below):
 #
-# Firewall: allow 7443/tcp only from the hub. The agent talks mTLS only and answers
-# nothing but the paired hub(s).
+#   A) Direct   — the hub connects to port 7443 on this server.
+#                 Keep "7443:7443" and allow 7443/tcp in the firewall ONLY from the hub.
+#                 Set STRAWLOG_ALLOW_FROM below to the hub's IP (or LAN / VPN range).
+#
+#   B) Via SSH  — nothing extra is opened; the hub logs in with this server's existing SSH
+#                 (password or private key) and reaches the agent from inside the server.
+#                 Use "127.0.0.1:7443:7443" instead: only this server itself can connect to it,
+#                 so no firewall rule is needed. Leave STRAWLOG_ALLOW_FROM as it is.
+#                 The SSH server must allow TCP forwarding (OpenSSH does by default).
+#
+# Then:
+#   1. docker compose up -d
+#   2. docker compose logs strawlog-agent | grep -A1 "PAIRING CODE"
+#      (new code any time: docker compose exec strawlog-agent strawlog agent pair)
+#   3. dashboard → Nodes → Add agent
+#        A) Direct:  address <this-host>:7443 + code
+#        B) Via SSH: SSH host + username + password/key, agent address 127.0.0.1:7443 + code
+#
+# The agent talks mTLS only and answers nothing but the paired hub(s), in both modes.
 
 name: strawlog-agent
 
@@ -19,11 +32,18 @@ services:
     command: ["agent"]
     restart: unless-stopped
     ports:
-      - "7443:7443"            # or "10.0.0.5:7443:7443" to bind a single (VPN/LAN) interface
+      # A) Direct: reachable from the network (firewall it to the hub).
+      #    "10.0.0.5:7443:7443" limits it to one interface (e.g. LAN / WireGuard / Tailscale).
+      - "7443:7443"
+      # B) Via SSH: reachable only from this server itself; comment the line above and use this one.
+      #    Don't remove "ports:" completely: the hub's SSH tunnel needs this fixed local address.
+      # - "127.0.0.1:7443:7443"
     environment:
       STRAWLOG_MODE: agent
       STRAWLOG_LISTEN: ":7443"
       # Drop connections from anywhere else before the TLS handshake. Comma separated IPs/CIDRs.
+      # Direct: narrow it to the hub's IP. Via SSH: keep the default (tunnelled traffic arrives
+      # from Docker's own network, 172.16.0.0/12).
       STRAWLOG_ALLOW_FROM: "192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,100.64.0.0/10"
       DOCKER_HOST: tcp://docker-proxy:2375
       # STRAWLOG_EXTRA_PATHS: "myapp=/srv/myapp/logs"

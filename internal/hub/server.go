@@ -142,10 +142,31 @@ func (s *Server) connect(n NodeRec) error {
 	if err != nil || len(pin) != 32 {
 		return errors.New("bad stored fingerprint")
 	}
-	s.mu.Lock()
-	s.remotes[n.ID] = NewRemote(n.Addr, s.client, pin)
-	s.mu.Unlock()
+	s.setRemote(n.ID, s.newRemote(n.Addr, pin, n.SSH))
 	return nil
+}
+
+func (s *Server) newRemote(addr string, pin []byte, sc *SSHConf) *Remote {
+	var t *sshTunnel
+	if sc != nil {
+		t = newSSHTunnel(*sc)
+	}
+	return NewRemote(addr, s.client, pin, t)
+}
+
+// setRemote installs (or with nil, removes) the client for a node and closes the old one.
+func (s *Server) setRemote(id string, r *Remote) {
+	s.mu.Lock()
+	old := s.remotes[id]
+	if r == nil {
+		delete(s.remotes, id)
+	} else {
+		s.remotes[id] = r
+	}
+	s.mu.Unlock()
+	if old != nil && old != r {
+		old.Close()
+	}
 }
 
 func (s *Server) node(id string) (api.Node, error) {
@@ -602,6 +623,15 @@ type nodeView struct {
 	LatencyMs int64     `json:"latencyMs"`
 	Info      *api.Info `json:"info,omitempty"`
 	Fp        string    `json:"fingerprint,omitempty"`
+	SSH       *sshView  `json:"ssh,omitempty"`
+}
+
+// sshView is the public part of SSHConf; credentials never leave the hub.
+type sshView struct {
+	Host    string `json:"host"`
+	User    string `json:"user"`
+	Auth    string `json:"auth"` // password | key
+	HostKey string `json:"hostKey,omitempty"`
 }
 
 func (s *Server) nodeList() []nodeView {
@@ -610,7 +640,11 @@ func (s *Server) nodeList() []nodeView {
 		out = append(out, nodeView{ID: LocalID, Name: s.cfg.LocalName, Local: true})
 	}
 	for _, n := range s.store.get().Nodes {
-		out = append(out, nodeView{ID: n.ID, Name: n.Name, Addr: n.Addr, Fp: n.Fingerprint[:16]})
+		v := nodeView{ID: n.ID, Name: n.Name, Addr: n.Addr, Fp: n.Fingerprint[:16]}
+		if n.SSH != nil {
+			v.SSH = &sshView{Host: n.SSH.Host, User: n.SSH.User, Auth: n.SSH.auth(), HostKey: n.SSH.HostKey}
+		}
+		out = append(out, v)
 	}
 	return out
 }
@@ -670,13 +704,64 @@ func normalizeAddr(addr string) (string, error) {
 	return addr, nil
 }
 
+// sshReq is the SSH part of an add/edit request. On edit, empty credentials keep the stored ones.
+type sshReq struct {
+	Host, User, Password, Key, Passphrase string
+}
+
+// buildSSH turns a request into a config, reusing stored credentials and host key where they still apply.
+func buildSSH(req *sshReq, prev *SSHConf) (*SSHConf, error) {
+	host, err := normalizeSSHHost(req.Host)
+	if err != nil {
+		return nil, err
+	}
+	c := &SSHConf{Host: host, User: strings.TrimSpace(req.User)}
+	switch {
+	case strings.TrimSpace(req.Key) != "":
+		c.Key, c.Passphrase = strings.TrimSpace(req.Key)+"\n", req.Passphrase
+	case req.Password != "":
+		c.Password = req.Password
+	case prev != nil:
+		c.Password, c.Key, c.Passphrase = prev.Password, prev.Key, prev.Passphrase
+		if req.Passphrase != "" && prev.Key != "" {
+			c.Passphrase = req.Passphrase
+		}
+	}
+	if prev != nil && prev.Host == c.Host {
+		c.HostKey = prev.HostKey
+	}
+	if _, err := c.clientConfig(new(string)); err != nil { // validates user + credentials early
+		return nil, err
+	}
+	return c, nil
+}
+
+// agentAddr normalises the agent address; over SSH it defaults to the server's loopback.
+func agentAddr(addr string, viaSSH bool) (string, error) {
+	if viaSSH && strings.TrimSpace(addr) == "" {
+		addr = "127.0.0.1:7443"
+	}
+	return normalizeAddr(addr)
+}
+
 func (s *Server) handleAddNode(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Name, Addr, Code string }
+	var req struct {
+		Name, Addr, Code string
+		SSH              *sshReq
+	}
 	if err := readBody(r, &req); err != nil {
 		jsonErr(w, 400, err)
 		return
 	}
-	addr, err := normalizeAddr(req.Addr)
+	var sc *SSHConf
+	if req.SSH != nil {
+		var err error
+		if sc, err = buildSSH(req.SSH, nil); err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+	}
+	addr, err := agentAddr(req.Addr, sc != nil)
 	if err != nil {
 		jsonErr(w, 400, err)
 		return
@@ -693,14 +778,18 @@ func (s *Server) handleAddNode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	rem := NewRemote(addr, s.client, fp)
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	rem := s.newRemote(addr, fp, sc)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	hubName, _ := os.Hostname()
 	info, err := rem.Pair(ctx, tok, "hub@"+hubName)
 	if err != nil {
+		rem.Close()
 		jsonErr(w, 502, fmt.Errorf("pairing failed: %v", err))
 		return
+	}
+	if sc != nil {
+		sc.HostKey = rem.tunnel.HostKey()
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
@@ -708,16 +797,25 @@ func (s *Server) handleAddNode(w http.ResponseWriter, r *http.Request) {
 	}
 	idb := make([]byte, 6)
 	_, _ = rand.Read(idb)
-	rec := NodeRec{ID: base64.RawURLEncoding.EncodeToString(idb), Name: trunc(name, 64), Addr: addr, Fingerprint: fpHex, AddedAt: time.Now().Unix()}
+	rec := NodeRec{ID: base64.RawURLEncoding.EncodeToString(idb), Name: trunc(name, 64), Addr: addr, Fingerprint: fpHex, AddedAt: time.Now().Unix(), SSH: sc}
 	if err := s.store.update(func(st *hubState) error { st.Nodes = append(st.Nodes, rec); return nil }); err != nil {
+		rem.Close()
 		jsonErr(w, 500, err)
 		return
 	}
-	s.mu.Lock()
-	s.remotes[rec.ID] = rem
-	s.mu.Unlock()
-	s.log.Info("node paired", "name", rec.Name, "addr", addr)
-	jsonOut(w, 200, rec)
+	s.setRemote(rec.ID, rem)
+	s.log.Info("node paired", "name", rec.Name, "addr", addr, "ssh", sc != nil)
+	jsonOut(w, 200, nodeOut(rec))
+}
+
+// nodeOut strips credentials before a record is sent to the browser.
+func nodeOut(n NodeRec) NodeRec {
+	if n.SSH != nil {
+		c := *n.SSH
+		c.Password, c.Key, c.Passphrase = "", "", ""
+		n.SSH = &c
+	}
+	return n
 }
 
 func trunc(s string, n int) string {
@@ -728,38 +826,102 @@ func trunc(s string, n int) string {
 }
 
 func (s *Server) handleRenameNode(w http.ResponseWriter, r *http.Request) {
-	var req struct{ Name, Addr string }
+	var req struct {
+		Name, Addr string
+		Mode       string // "" keeps the connection type, "direct" or "ssh" switches it
+		SSH        *sshReq
+	}
 	if err := readBody(r, &req); err != nil {
 		jsonErr(w, 400, err)
 		return
 	}
 	id := r.PathValue("id")
-	var updated NodeRec
+	var cur NodeRec
+	found := false
+	for _, n := range s.store.get().Nodes {
+		if n.ID == id {
+			cur, found = n, true
+		}
+	}
+	if !found {
+		jsonErr(w, 400, errors.New("unknown node"))
+		return
+	}
+	next := cur
+	if n := strings.TrimSpace(req.Name); n != "" {
+		next.Name = trunc(n, 64)
+	}
+	connChanged := false
+	switch req.Mode {
+	case "direct":
+		connChanged = next.SSH != nil
+		next.SSH = nil
+	case "ssh":
+		if req.SSH == nil {
+			jsonErr(w, 400, errors.New("SSH settings are required"))
+			return
+		}
+		sc, err := buildSSH(req.SSH, cur.SSH)
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		next.SSH, connChanged = sc, true
+	case "":
+	default:
+		jsonErr(w, 400, fmt.Errorf("unknown mode %q", req.Mode))
+		return
+	}
+	if req.Addr != "" || connChanged {
+		addr := req.Addr
+		if addr == "" && !(cur.SSH != nil && next.SSH == nil) {
+			addr = cur.Addr // keep, unless leaving SSH where a loopback address makes no sense
+		}
+		a, err := agentAddr(addr, next.SSH != nil)
+		if err != nil {
+			jsonErr(w, 400, err)
+			return
+		}
+		connChanged = connChanged || a != cur.Addr
+		next.Addr = a
+	}
+	var rem *Remote
+	if connChanged {
+		// test the new connection before saving it, and pin a new SSH host key on success
+		pin, _ := hex.DecodeString(cur.Fingerprint)
+		rem = s.newRemote(next.Addr, pin, next.SSH)
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		_, err := rem.Info(ctx)
+		cancel()
+		if err != nil {
+			rem.Close()
+			jsonErr(w, 502, fmt.Errorf("could not reach the agent with these settings: %v", err))
+			return
+		}
+		if next.SSH != nil {
+			next.SSH.HostKey = rem.tunnel.HostKey()
+		}
+	}
 	err := s.store.update(func(st *hubState) error {
 		for i := range st.Nodes {
 			if st.Nodes[i].ID == id {
-				if n := strings.TrimSpace(req.Name); n != "" {
-					st.Nodes[i].Name = trunc(n, 64)
-				}
-				if req.Addr != "" {
-					a, err := normalizeAddr(req.Addr)
-					if err != nil {
-						return err
-					}
-					st.Nodes[i].Addr = a
-				}
-				updated = st.Nodes[i]
+				st.Nodes[i] = next
 				return nil
 			}
 		}
 		return errors.New("unknown node")
 	})
 	if err != nil {
+		if rem != nil {
+			rem.Close()
+		}
 		jsonErr(w, 400, err)
 		return
 	}
-	_ = s.connect(updated)
-	jsonOut(w, 200, updated)
+	if rem != nil {
+		s.setRemote(id, rem)
+	}
+	jsonOut(w, 200, nodeOut(next))
 }
 
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
@@ -777,9 +939,7 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, 404, err)
 		return
 	}
-	s.mu.Lock()
-	delete(s.remotes, id)
-	s.mu.Unlock()
+	s.setRemote(id, nil)
 	jsonOut(w, 200, map[string]bool{"ok": true})
 }
 

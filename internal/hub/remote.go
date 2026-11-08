@@ -20,21 +20,36 @@ import (
 
 // Remote talks to an agent over pinned mutual TLS. It implements api.Node.
 type Remote struct {
-	base string
-	hc   *http.Client
+	base   string
+	hc     *http.Client
+	tunnel *sshTunnel // nil for a direct connection
 }
 
-func NewRemote(addr string, own tls.Certificate, pin []byte) *Remote {
+// NewRemote connects directly to addr, or through tunnel when it is non-nil
+// (addr is then the agent address as seen from the SSH server).
+func NewRemote(addr string, own tls.Certificate, pin []byte, tunnel *sshTunnel) *Remote {
+	dial := (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	if tunnel != nil {
+		dial = tunnel.DialContext
+	}
 	tr := &http.Transport{
 		TLSClientConfig:       tlsutil.PinnedClient(own, pin),
 		ForceAttemptHTTP2:     true,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		DialContext:           dial,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ResponseHeaderTimeout: 90 * time.Second,
 		IdleConnTimeout:       90 * time.Second,
 		MaxIdleConnsPerHost:   4,
 	}
-	return &Remote{base: "https://" + addr, hc: &http.Client{Transport: tr}}
+	return &Remote{base: "https://" + addr, hc: &http.Client{Transport: tr}, tunnel: tunnel}
+}
+
+// Close drops pooled connections and the SSH tunnel, if any.
+func (r *Remote) Close() {
+	r.hc.CloseIdleConnections()
+	if r.tunnel != nil {
+		r.tunnel.Close()
+	}
 }
 
 func (r *Remote) do(ctx context.Context, method, path string, in, out any) error {

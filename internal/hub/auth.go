@@ -89,11 +89,12 @@ func validUsername(u string) error {
 // ---------- persistent hub state ----------
 
 type NodeRec struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Addr        string `json:"addr"`
-	Fingerprint string `json:"fingerprint"` // hex sha256 of agent cert
-	AddedAt     int64  `json:"addedAt"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Addr        string   `json:"addr"`
+	Fingerprint string   `json:"fingerprint"` // hex sha256 of agent cert
+	AddedAt     int64    `json:"addedAt"`
+	SSH         *SSHConf `json:"ssh,omitempty"` // reach the agent through SSH; Addr is then as seen from the server
 }
 
 type hubState struct {
@@ -107,6 +108,12 @@ func (st *hubState) clone() hubState {
 	c := *st
 	c.Users = slices.Clone(st.Users)
 	c.Nodes = slices.Clone(st.Nodes)
+	for i := range c.Nodes {
+		if c.Nodes[i].SSH != nil {
+			v := *c.Nodes[i].SSH
+			c.Nodes[i].SSH = &v
+		}
+	}
 	c.Channels = make([]Channel, len(st.Channels))
 	for i, ch := range st.Channels {
 		ch.Events = slices.Clone(ch.Events)

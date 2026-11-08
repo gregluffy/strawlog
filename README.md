@@ -27,7 +27,8 @@ as a small container.
 ```
 
 The **hub connects to the agents**, never the other way round. Your hub can sit behind NAT on a laptop,
-and servers only need port 7443 open, and only to the hub.
+and servers only need port 7443 open, and only to the hub. Or nothing extra at all: the hub can reach an
+agent through the server's existing SSH (see [Through SSH](#through-ssh-no-extra-port)).
 
 The image is the same for both roles: `strawlog hub` or `strawlog agent`.
 
@@ -62,6 +63,32 @@ In the dashboard go to **Nodes → Add agent**, enter `server-ip:7443` and paste
 
 > Building on every server isn't needed: `docker build -t registry.lan/strawlog:0.1.0 .`, push it, and
 > set `STRAWLOG_IMAGE=registry.lan/strawlog:0.1.0` (or `docker save | ssh host docker load`).
+
+### Through SSH (no extra port)
+
+If the server already has SSH, the agent port doesn't need to be opened at all. The hub logs in over
+SSH with a password or a private key (like an SSH tunnel in a database client) and reaches the agent
+from inside the server. The agent's own mTLS still runs inside the tunnel.
+
+1. In the agent compose file, use the "Via SSH" port line, `"127.0.0.1:7443:7443"`: only the server itself can
+   connect to it, so no firewall rule is needed. Keep the `ports:` entry (the tunnel needs that fixed local
+   address) and leave `STRAWLOG_ALLOW_FROM` at its default.
+2. **Nodes → Add agent → Via SSH**: SSH host, username, password or private key, and the pairing code.
+   The agent address defaults to `127.0.0.1:7443`.
+
+The server's SSH host key is remembered on the first connect and checked on every connect after that.
+The SSH server must allow TCP forwarding (OpenSSH does by default; `AllowTcpForwarding no` blocks it).
+A dedicated login is a good idea; to stop it from doing anything but reach the agent, put this in
+`/etc/ssh/sshd_config` on the server:
+
+```
+Match User strawlog
+    AllowTcpForwarding local
+    PermitOpen 127.0.0.1:7443
+    X11Forwarding no
+    PermitTTY no
+    ForceCommand /bin/false
+```
 
 ### Proxmox / home LAN
 
@@ -232,12 +259,12 @@ docker exec -it strawlog strawlog hub set-password greg   # reset a user's passw
 - Bound to `127.0.0.1` by default.
 
 **Notes**
-- Keep the hub's `/data` volume private. It holds the client key that agents trust and the webhook URLs.
+- Keep the hub's `/data` volume private. It holds the client key that agents trust, the webhook URLs, and the SSH passwords / private keys of nodes added via SSH (in `hub.json`, mode 0600). Those credentials are never sent to the browser.
 - Anyone with access to the Docker socket on a host is root there anyway, so the socket proxy limits what *Straw Log* can do, not what the host's admins can.
 
 ## Efficiency
 
-- Static Go binary with no dependencies outside the standard library. Idle memory is about 12–20 MB. The image is about 155 MB, mostly Debian plus journalctl.
+- Static Go binary; the only dependency outside the standard library is `golang.org/x/crypto/ssh`. Idle memory is about 12–20 MB. The image is about 155 MB, mostly Debian plus journalctl.
 - Discovery is cached (60s) and walks are depth- and entry-limited.
 - Search streams line by line with bounded memory: a ring of the newest N matches, and lines capped at 16 KB.
 - Agent responses are gzipped. Live tails are batched (150–200 ms flushes) over HTTP/2.
