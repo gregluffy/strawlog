@@ -8,6 +8,7 @@
   import Switch from '../lib/ui/Switch.svelte'
   import Segmented from '../lib/ui/Segmented.svelte'
   import { confirmDialog, toast } from '../lib/ui/overlay.svelte.js'
+  import { globRe, matches } from '../lib/match.js'
 
   let policies = $state([])
   let sources = $state([])
@@ -37,6 +38,14 @@
       .sort((a, b) => a - b)
       .map((m) => ({ value: m, label: every(m).replace(/^./, (c) => c.toUpperCase()) })),
   )
+  // live view of what the policy being edited selects (same rules as the agent)
+  let globBad = $derived(!!edit?.match.pathGlob && globRe(edit.match.pathGlob) === null)
+  let matchAll = $derived(!!edit && !edit.match.apps.length && !edit.match.kinds.length && !edit.match.sources.length && !edit.match.pathGlob)
+  let matched = $derived.by(() => {
+    if (!edit) return []
+    const re = edit.match.pathGlob ? globRe(edit.match.pathGlob) : undefined
+    return sources.filter((s) => matches(edit.match, s, re))
+  })
   let srcName = $derived(Object.fromEntries(sources.map((s) => [s.id, `${s.app} / ${s.name}`])))
 
   async function load() {
@@ -276,8 +285,24 @@
         {#if edit.match.sources.length}
           <div class="chips">{#each edit.match.sources as s}<button type="button" class="chip on" onclick={() => (edit.match.sources = edit.match.sources.filter((x) => x !== s))}>{srcName[s] || s} <Icon name="x" size={12} /></button>{/each}</div>
         {/if}
-        <label class="field">Path glob (optional) <input class="mono" bind:value={edit.match.pathGlob} placeholder="/var/log/nginx/*.log" /></label>
-        <p class="dim small" style="margin:0">All conditions must match. Nothing selected = every source on the node.</p>
+        <label class="field">Path glob (optional) <input class="mono" class:bad={globBad} bind:value={edit.match.pathGlob} placeholder="/var/log/nginx/*.log" /></label>
+        <p class="dim small" style="margin:0">
+          Matched against each source's active file path, so it also catches sources that appear later.
+          <code>*</code> and <code>?</code> stay within one folder (<code>/var/log/*.log</code> skips <code>/var/log/nginx/</code>; use <code>/var/log/*/*.log</code>), <code>[abc]</code> matches one character. There is no <code>**</code>.
+        </p>
+        <p class="dim small" style="margin:0">Every filter you set must match; empty filters don't restrict anything.</p>
+        {#if globBad}
+          <div class="alert err small">Invalid path glob: check for an unclosed <code>[</code> or a trailing <code>\</code>. As written it matches nothing.</div>
+        {:else if matchAll}
+          <div class="alert warn small">No filters set: this policy applies to <b>every source on {nodeName(app.node)}</b> ({sources.length}). Pick a kind, app, source or path to narrow it.</div>
+        {:else if !matched.length}
+          <div class="alert warn small">These filters match <b>no sources</b>, so the policy would do nothing. Filters combine, so a source must pass all of them. For example, a picked source must also have one of the selected kinds and apps.</div>
+        {:else}
+          <details class="matchlist">
+            <summary>Matches <b>{matched.length}</b> of {sources.length} sources</summary>
+            <ul>{#each matched as s (s.id)}<li><span>{s.app} / {s.name}</span> <span class="mono dim">{s.path}</span></li>{/each}</ul>
+          </details>
+        {/if}
 
         <h4>Rules</h4>
         <div class="grid two">
@@ -384,6 +409,11 @@
 </div>
 
 <style>
+  input.bad { border-color: var(--err); }
+  .matchlist { font-size: 13px; }
+  .matchlist summary { cursor: pointer; color: var(--muted); }
+  .matchlist ul { margin: 6px 0 0; padding-left: 18px; max-height: 180px; overflow: auto; }
+  .matchlist li { overflow-wrap: anywhere; }
   .editor { display: flex; flex-direction: column; gap: 10px; }
   .editor h3 { margin: 8px 0 0; padding-top: 10px; border-top: 1px solid var(--border); }
   .editor h4 { margin: 6px 0 0; font-size: 12px; font-weight: 620; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
