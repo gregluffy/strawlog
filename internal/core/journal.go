@@ -64,24 +64,68 @@ func (c *Core) journalSources() []api.Source {
 	return out
 }
 
+// unitsTTL is how long a journal's unit list is reused. Listing units makes
+// journalctl read every journal file (seconds on a multi-GB journal) and the
+// set of units rarely changes, so stale lists are refreshed in the background.
+const unitsTTL = 30 * time.Minute
+
+type unitsEntry struct {
+	units      []string
+	at         time.Time
+	refreshing bool
+}
+
+// journalUnits returns the systemd units seen in a journal. Only the very first
+// call per journal waits for journalctl; later ones get the cached list.
 func (c *Core) journalUnits(id, host string) []string {
 	if c.cfg.Journalctl == "" {
 		return nil
 	}
 	c.unitsMu.Lock()
-	defer c.unitsMu.Unlock()
-	if c.units != nil && time.Since(c.unitsTime) < 5*time.Minute {
-		return c.units[id]
+	if c.units == nil {
+		c.units = map[string]*unitsEntry{}
 	}
-	if c.units == nil || time.Since(c.unitsTime) >= 5*time.Minute {
-		c.units = map[string][]string{}
-		c.unitsTime = time.Now()
+	e := c.units[id]
+	if e == nil {
+		e = &unitsEntry{}
+		c.units[id] = e
+		c.unitsMu.Unlock()
+		units, err := c.listUnits(host)
+		c.unitsMu.Lock()
+		e.at = time.Now()
+		if err == nil {
+			e.units = units
+		}
+		c.unitsMu.Unlock()
+		return units
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	if time.Since(e.at) >= unitsTTL && !e.refreshing && !e.at.IsZero() {
+		e.refreshing = true
+		go func() {
+			units, err := c.listUnits(host)
+			c.unitsMu.Lock()
+			defer c.unitsMu.Unlock()
+			e.refreshing, e.at = false, time.Now()
+			if err == nil {
+				e.units = units
+			}
+		}()
+	}
+	units := e.units
+	c.unitsMu.Unlock()
+	return units
+}
+
+func (c *Core) listUnits(host string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	t := time.Now()
 	b, err := exec.CommandContext(ctx, c.cfg.Journalctl, "--directory", c.hp(host), "--no-pager", "-F", "_SYSTEMD_UNIT").Output()
+	if d := time.Since(t); d > 2*time.Second {
+		c.log.Info("listing journal units is slow; consider capping the journal size", "dir", host, "took", d.Round(time.Millisecond))
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var units []string
 	for _, u := range strings.Split(strings.TrimSpace(string(b)), "\n") {
@@ -90,8 +134,7 @@ func (c *Core) journalUnits(id, host string) []string {
 		}
 	}
 	sort.Strings(units)
-	c.units[id] = units
-	return units
+	return units, nil
 }
 
 type journalEntry struct {

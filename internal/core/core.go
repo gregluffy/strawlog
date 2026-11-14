@@ -51,9 +51,8 @@ type Core struct {
 	lastScan   time.Time
 	dockerErr  string
 
-	unitsMu   sync.Mutex
-	units     map[string][]string
-	unitsTime time.Time
+	unitsMu sync.Mutex
+	units   map[string]*unitsEntry // by journal source id
 
 	hist     *history
 	policies *policyStore
@@ -299,6 +298,8 @@ func (c *Core) scan(ctx context.Context) ([]api.Source, error) {
 	c.scanMu.Lock()
 	defer c.scanMu.Unlock()
 
+	t0 := time.Now()
+	var tDocker, tFiles time.Duration
 	acc := newAccumulator(c)
 	conts := map[string]ContainerJSON{}
 	dockerErr := ""
@@ -341,6 +342,8 @@ func (c *Core) scan(ctx context.Context) ([]api.Source, error) {
 			}
 		}
 	}
+	tDocker = time.Since(t0) // container listing plus walking their mounts
+	t1 := time.Now()
 	// /var/log: lower priority than container mounts (addFile keeps first owner)
 	acc.walkVarLog()
 	for _, e := range c.cfg.ExtraPaths {
@@ -354,7 +357,14 @@ func (c *Core) scan(ctx context.Context) ([]api.Source, error) {
 		acc.glob(p, app, "extra")
 	}
 	srcs := acc.finish()
+	tFiles = time.Since(t1)
+	t2 := time.Now()
 	srcs = append(srcs, c.journalSources()...)
+	if total := time.Since(t0); total > 2*time.Second {
+		c.log.Warn("slow source scan", "took", total.Round(time.Millisecond),
+			"docker", tDocker.Round(time.Millisecond), "files", tFiles.Round(time.Millisecond),
+			"journal", time.Since(t2).Round(time.Millisecond), "sources", len(srcs))
+	}
 	sort.Slice(srcs, func(i, j int) bool {
 		if srcs[i].App != srcs[j].App {
 			return srcs[i].App < srcs[j].App
