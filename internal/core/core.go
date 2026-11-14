@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,7 +42,8 @@ type Core struct {
 	started time.Time
 	log     *slog.Logger
 
-	scanMu     sync.Mutex // serialises scans
+	scanMu     sync.Mutex  // serialises scans
+	refreshing atomic.Bool // a background rescan started by cachedSources is running
 	mu         sync.RWMutex
 	sources    []api.Source
 	byID       map[string]*api.Source
@@ -157,7 +159,7 @@ func (c *Core) hp(host string) string {
 }
 
 func (c *Core) Info(ctx context.Context) (api.Info, error) {
-	srcs, _ := c.Sources(ctx, false)
+	srcs := c.cachedSources(ctx)
 	h, _ := os.Hostname()
 	if b, err := os.ReadFile(c.hp("/etc/hostname")); err == nil && c.cfg.HostRoot != "" {
 		if s := strings.TrimSpace(string(b)); s != "" {
@@ -241,6 +243,30 @@ func (c *Core) Sources(ctx context.Context, refresh bool) ([]api.Source, error) 
 	}
 	s, err := c.scan(ctx)
 	return withGrowth(s, c.hist), err
+}
+
+// cachedSources never waits on a rescan once one has completed: stale results are
+// returned as-is and refreshed in the background. Info is the hub's liveness probe
+// and must answer well within its timeout even when a scan takes seconds.
+func (c *Core) cachedSources(ctx context.Context) []api.Source {
+	c.mu.RLock()
+	out, last := c.sources, c.lastScan
+	c.mu.RUnlock()
+	if last.IsZero() {
+		s, _ := c.Sources(ctx, false)
+		return s
+	}
+	if time.Since(last) >= 60*time.Second && c.refreshing.CompareAndSwap(false, true) {
+		go func() {
+			defer c.refreshing.Store(false)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			if _, err := c.scan(ctx); err != nil {
+				c.log.Warn("background scan", "err", err)
+			}
+		}()
+	}
+	return withGrowth(out, c.hist)
 }
 
 func withGrowth(in []api.Source, h *history) []api.Source {
